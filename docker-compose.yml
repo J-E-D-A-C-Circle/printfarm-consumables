@@ -1,0 +1,75 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dvla_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_USER=dvla_user
+      - DB_PASSWORD=dvla_pass
+      - DB_NAME=dvla_consumables
+      - JWT_SECRET=f7c9d2a81e4b6f0c93a7d5e21b8f4c6a0d9e3f7b2c5a8e1d6f9b4c7a2e5d8f1
+      - JWT_EXPIRES_IN=8h
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      - NEXT_PUBLIC_APP_NAME=DVLA Consumables Management
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - dvla_network
+
+  db:
+    image: mysql:8.0
+    container_name: dvla_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: dvla_root_2026
+      MYSQL_DATABASE: dvla_consumables
+      MYSQL_USER: dvla_user
+      MYSQL_PASSWORD: dvla_pass
+    ports:
+      - "3307:3306"
+    volumes:
+      - dvla_mysql_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dvla_user", "-pdvla_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dvla_network
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: dvla_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: dvla_user
+      PMA_PASSWORD: dvla_pass
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - dvla_network
+
+volumes:
+  dvla_mysql_data:
+    driver: local
+
+networks:
+  dvla_network:
+    driver: bridge
