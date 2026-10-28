@@ -33,6 +33,7 @@ interface CategoryItem {
   name: string;
   code_prefix?: string;
   purpose?: string;
+  item_count?: number;
 }
 
 interface Station {
@@ -164,7 +165,7 @@ export default function SettingsPage() {
 
   // Handle Delete Category
   const handleDeleteCategory = async (cat: CategoryItem) => {
-    if (!confirm(`Are you sure you want to delete category "${cat.name}"?`)) return;
+    if (!confirm(`Are you sure you want to delete consumable type "${cat.name}"?`)) return;
     setCategoryMsg(null);
     setDeletingCatId(cat.id);
 
@@ -176,14 +177,37 @@ export default function SettingsPage() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Cannot delete "${cat.name}".`);
+      if (!res.ok) {
+        if (res.status === 409) {
+          const proceedForce = confirm(
+            `${data.error}\n\nClick OK to archive the linked consumable items and delete consumable type "${cat.name}".`
+          );
+          if (proceedForce) {
+            const forceRes = await fetch("/api/categories", {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: cat.id, name: cat.name, force: true }),
+            });
+            const forceData = await forceRes.json();
+            if (!forceRes.ok) throw new Error(forceData.error || `Cannot delete "${cat.name}".`);
+            setCategoryMsg({
+              type: "success",
+              text: `Consumable type "${cat.name}" and linked items were successfully archived.`,
+            });
+            await loadData();
+            return;
+          }
+          return;
+        }
+        throw new Error(data.error || `Cannot delete "${cat.name}".`);
+      }
 
-      setCategoryMsg({ type: "success", text: `Category "${cat.name}" deleted successfully.` });
+      setCategoryMsg({ type: "success", text: `Consumable type "${cat.name}" deleted successfully.` });
       await loadData();
     } catch (err: unknown) {
       setCategoryMsg({
         type: "error",
-        text: err instanceof Error ? err.message : `Cannot delete category "${cat.name}".`,
+        text: err instanceof Error ? err.message : `Cannot delete "${cat.name}".`,
       });
     } finally {
       setDeletingCatId(null);
@@ -692,10 +716,10 @@ export default function SettingsPage() {
                 </Button>
               </div>
 
-              {/* Category List without nested scrollbar / overflow height */}
+              {/* Consumable Types / Category List */}
               <div className="space-y-2">
                 <Label className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Active Database Categories ({categories.length})
+                  Consumable Types & Categories ({categories.length})
                 </Label>
                 <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white">
                   {categories.map((cat) => (
@@ -707,12 +731,18 @@ export default function SettingsPage() {
                             {cat.code_prefix}
                           </Badge>
                         )}
+                        <Badge
+                          variant="secondary"
+                          className="text-[11px] font-normal text-slate-600 bg-slate-100"
+                        >
+                          {cat.item_count ? `${cat.item_count} item${cat.item_count === 1 ? "" : "s"}` : "0 items"}
+                        </Badge>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                        title={`Delete category "${cat.name}"`}
+                        title={`Delete consumable type "${cat.name}"`}
                         disabled={deletingCatId === cat.id}
                         onClick={() => handleDeleteCategory(cat)}
                       >
@@ -725,7 +755,7 @@ export default function SettingsPage() {
                     </div>
                   ))}
                   {categories.length === 0 && (
-                    <div className="p-6 text-center text-xs text-slate-500">No categories found in system.</div>
+                    <div className="p-6 text-center text-xs text-slate-500">No consumable types found in system.</div>
                   )}
                 </div>
               </div>

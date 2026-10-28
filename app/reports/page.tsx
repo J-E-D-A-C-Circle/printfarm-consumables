@@ -11,6 +11,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -31,9 +32,11 @@ import {
   TrendingUp,
   Package,
   RotateCcw,
-  X
+  Calendar,
+  Filter,
+  ArrowRight,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx-js-style";
 
 interface UsageItem {
@@ -110,6 +113,8 @@ interface CategoryOption {
   name: string;
 }
 
+type DatePreset = "all" | "today" | "week" | "month" | "quarter" | "year" | "custom";
+
 export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<"work_done" | "inventory" | "low_stock">("work_done");
   const [usageItems, setUsageItems] = useState<UsageItem[]>([]);
@@ -129,17 +134,7 @@ export default function ReportsPage() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-
-  // Reconcile modal state
-  const [reconcilingBatch, setReconcilingBatch] = useState<BatchItem | null>(null);
-  const [printedCards, setPrintedCards] = useState("");
-  const [damagedCards, setDamagedCards] = useState("");
-  const [recaptureCards, setRecaptureCards] = useState("");
-  const [returnedToStock, setReturnedToStock] = useState("");
-  const [damageReason, setDamageReason] = useState("");
-  const [notes, setNotes] = useState("");
-  const [reconcileSubmitting, setReconcileSubmitting] = useState(false);
-  const [reconcileMsg, setReconcileMsg] = useState<string | null>(null);
+  const [activePreset, setActivePreset] = useState<DatePreset>("all");
 
   // Load dropdown options for filters
   useEffect(() => {
@@ -172,11 +167,18 @@ export default function ReportsPage() {
       if (selectedCategory && selectedCategory !== "all") params.set("category", selectedCategory);
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
-      const queryStr = params.toString() ? `?${params.toString()}` : "";
+      params.set("_t", Date.now().toString());
+      const queryStr = `?${params.toString()}`;
 
       const [usageRes, yieldRes] = await Promise.all([
-        fetch(`/api/reports/usage${queryStr}`),
-        fetch(`/api/reports/yield${queryStr}`),
+        fetch(`/api/reports/usage${queryStr}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+        }),
+        fetch(`/api/reports/yield${queryStr}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+        }),
       ]);
 
       if (usageRes.ok) {
@@ -200,6 +202,69 @@ export default function ReportsPage() {
     fetchReports();
   }, [fetchReports]);
 
+  // Handle Preset Date selection
+  const handleApplyPreset = (preset: DatePreset) => {
+    setActivePreset(preset);
+    const now = new Date();
+    const toISO = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+
+    if (preset === "all") {
+      setDateFrom("");
+      setDateTo("");
+      return;
+    }
+
+    if (preset === "today") {
+      const today = toISO(now);
+      setDateFrom(today);
+      setDateTo(today);
+      return;
+    }
+
+    if (preset === "week") {
+      const d = new Date(now);
+      const day = d.getDay();
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      const monday = new Date(d.setDate(diff));
+      setDateFrom(toISO(monday));
+      setDateTo(toISO(now));
+      return;
+    }
+
+    if (preset === "month") {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      setDateFrom(toISO(firstDay));
+      setDateTo(toISO(now));
+      return;
+    }
+
+    if (preset === "quarter") {
+      const qMonth = Math.floor(now.getMonth() / 3) * 3;
+      const firstDay = new Date(now.getFullYear(), qMonth, 1);
+      setDateFrom(toISO(firstDay));
+      setDateTo(toISO(now));
+      return;
+    }
+
+    if (preset === "year") {
+      const firstDay = new Date(now.getFullYear(), 0, 1);
+      setDateFrom(toISO(firstDay));
+      setDateTo(toISO(now));
+      return;
+    }
+  };
+
+  const handleCustomDateChange = (from: string, to: string) => {
+    setActivePreset("custom");
+    setDateFrom(from);
+    setDateTo(to);
+  };
+
   const handleResetFilters = () => {
     setSearchTerm("");
     setStatusFilter("all");
@@ -207,84 +272,71 @@ export default function ReportsPage() {
     setSelectedCategory("all");
     setDateFrom("");
     setDateTo("");
-  };
-
-  // Open reconciliation modal
-  const openReconcile = (batch: BatchItem) => {
-    setReconcilingBatch(batch);
-    setPrintedCards(batch.printed_cards ? String(batch.printed_cards) : "");
-    setDamagedCards(batch.damaged_cards ? String(batch.damaged_cards) : "");
-    setRecaptureCards(batch.recapture_cards ? String(batch.recapture_cards) : "");
-    setReturnedToStock("");
-    setDamageReason(batch.reason_for_damage || "");
-    setNotes(batch.notes || "");
-    setReconcileMsg(null);
-  };
-
-  const handleSaveReconcile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reconcilingBatch) return;
-
-    setReconcileSubmitting(true);
-    try {
-      const res = await fetch(`/api/batches/${reconcilingBatch.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          printed_cards: parseInt(printedCards) || 0,
-          damaged_cards: parseInt(damagedCards) || 0,
-          recapture_cards: parseInt(recaptureCards) || 0,
-          returned_to_stock: parseInt(returnedToStock) || 0,
-          reason_for_damage: damageReason.trim() || undefined,
-          notes: notes.trim() || undefined,
-          date_of_reconciliation: new Date().toISOString().split("T")[0],
-        }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || "Failed to save reconciliation.");
-      }
-
-      setReconcileMsg("Work done successfully recorded and batch reconciled!");
-      setTimeout(() => {
-        setReconcilingBatch(null);
-        fetchReports();
-      }, 1200);
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error reconciling batch.");
-    } finally {
-      setReconcileSubmitting(false);
-    }
+    setActivePreset("all");
   };
 
   // Filtered lists with null-safe accessors
-  const filteredBatches = batches.filter((b) => {
-    const search = searchTerm.toLowerCase();
-    const matchesSearch =
-      (b.item_name || "").toLowerCase().includes(search) ||
-      (b.batch_code || "").toLowerCase().includes(search) ||
-      (b.issued_to || "").toLowerCase().includes(search) ||
-      (b.station_name || "").toLowerCase().includes(search) ||
-      (b.issue_reference || "").toLowerCase().includes(search);
-    const matchesStatus = statusFilter === "all" || b.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredBatches = useMemo(() => {
+    return batches.filter((b) => {
+      const search = searchTerm.toLowerCase();
+      const matchesSearch =
+        (b.item_name || "").toLowerCase().includes(search) ||
+        (b.batch_code || "").toLowerCase().includes(search) ||
+        (b.issued_to || "").toLowerCase().includes(search) ||
+        (b.station_name || "").toLowerCase().includes(search) ||
+        (b.issue_reference || "").toLowerCase().includes(search);
+      const matchesStatus = statusFilter === "all" || b.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [batches, searchTerm, statusFilter]);
 
-  const filteredUsage = usageItems.filter((i) => {
-    const search = searchTerm.toLowerCase();
-    return (
-      (i.name || "").toLowerCase().includes(search) ||
-      (i.item_code || "").toLowerCase().includes(search) ||
-      (i.category || "").toLowerCase().includes(search) ||
-      (i.station || "").toLowerCase().includes(search) ||
-      (i.department || "").toLowerCase().includes(search)
+  const filteredUsage = useMemo(() => {
+    return usageItems.filter((i) => {
+      const search = searchTerm.toLowerCase();
+      return (
+        (i.name || "").toLowerCase().includes(search) ||
+        (i.item_code || "").toLowerCase().includes(search) ||
+        (i.category || "").toLowerCase().includes(search) ||
+        (i.station || "").toLowerCase().includes(search) ||
+        (i.department || "").toLowerCase().includes(search)
+      );
+    });
+  }, [usageItems, searchTerm]);
+
+  const lowStockItems = useMemo(() => {
+    return usageItems.filter(
+      (i) => i.status === "LOW STOCK" || i.status === "OUT OF STOCK"
     );
-  });
+  }, [usageItems]);
 
-  const lowStockItems = usageItems.filter(
-    (i) => i.status === "LOW STOCK" || i.status === "OUT OF STOCK"
-  );
+  // Tab 1 Calculated Totals
+  const tab1Totals = useMemo(() => {
+    const totalCollected = filteredBatches.reduce((acc, b) => acc + (Number(b.quantity_issued) || 0), 0);
+    const totalPrinted = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.printed_cards) || 0) : 0), 0);
+    const totalDamaged = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.damaged_cards) || 0) : 0), 0);
+    const totalRecapture = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.recapture_cards) || 0) : 0), 0);
+    const netYield = totalCollected > 0 && totalPrinted > 0 ? ((totalPrinted / totalCollected) * 100).toFixed(1) : "—";
+    return { totalCollected, totalPrinted, totalDamaged, totalRecapture, netYield };
+  }, [filteredBatches]);
+
+  // Tab 2 Calculated Totals
+  const tab2Totals = useMemo(() => {
+    const totalReceived = filteredUsage.reduce((acc, i) => acc + (Number(i.received) || 0), 0);
+    const totalIssued = filteredUsage.reduce((acc, i) => acc + (Number(i.issued) || 0), 0);
+    const totalBalance = filteredUsage.reduce((acc, i) => acc + (Number(i.balance) || 0), 0);
+    return { totalReceived, totalIssued, totalBalance };
+  }, [filteredUsage]);
+
+  // Tab 3 Calculated Totals
+  const tab3Totals = useMemo(() => {
+    const totalBalance = lowStockItems.reduce((acc, i) => acc + (Number(i.balance) || 0), 0);
+    const totalReorder = lowStockItems.reduce((acc, i) => acc + (Number(i.reorder_level) || 0), 0);
+    const totalDeficit = lowStockItems.reduce((acc, i) => {
+      const def = (Number(i.reorder_level) || 0) - (Number(i.balance) || 0);
+      return acc + (def > 0 ? def : 0);
+    }, 0);
+    return { totalBalance, totalReorder, totalDeficit };
+  }, [lowStockItems]);
 
   // Full Excel Export
   const handleExportExcel = () => {
@@ -296,7 +348,6 @@ export default function ReportsPage() {
     const wb = XLSX.utils.book_new();
     const dateStr = new Date().toISOString().split("T")[0];
 
-    // Helper: apply header style
     const headerStyle = {
       font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
       fill: { fgColor: { rgb: "1B5E20" }, patternType: "solid" },
@@ -360,7 +411,15 @@ export default function ReportsPage() {
       item.status,
     ]);
 
-    const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows]);
+    const totalsInvRow = [
+      "", "", "TOTALS", "", "", "", "",
+      tab2Totals.totalReceived,
+      tab2Totals.totalIssued,
+      tab2Totals.totalBalance,
+      "", "",
+    ];
+
+    const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows, totalsInvRow]);
 
     invHeaders.forEach((_, ci) => {
       const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
@@ -375,13 +434,19 @@ export default function ReportsPage() {
       });
     });
 
+    const totalsInvRowIdx = invRows.length + 1;
+    totalsInvRow.forEach((_, ci) => {
+      const addr = XLSX.utils.encode_cell({ r: totalsInvRowIdx, c: ci });
+      if (wsInv[addr]) wsInv[addr].s = numColsInv.includes(ci) ? numTotal : totalStyle;
+    });
+
     wsInv["!cols"] = [
       { wch: 5 }, { wch: 14 }, { wch: 28 }, { wch: 18 },
       { wch: 18 }, { wch: 16 }, { wch: 8 },
       { wch: 13 }, { wch: 12 }, { wch: 16 },
       { wch: 18 }, { wch: 13 },
     ];
-    wsInv["!rows"] = [{ hpt: 28 }, ...invRows.map(() => ({ hpt: 20 }))];
+    wsInv["!rows"] = [{ hpt: 28 }, ...invRows.map(() => ({ hpt: 20 })), { hpt: 24 }];
     XLSX.utils.book_append_sheet(wb, wsInv, "Stock & Inventory");
 
     // SHEET 2: Collected Consumables & Work Done
@@ -420,17 +485,17 @@ export default function ReportsPage() {
       [b.reason_for_damage, b.notes].filter(Boolean).join(" | ") || "—",
     ]);
 
-    const reconciledOnly = filteredBatches.filter((b) => b.status === "Reconciled");
     const totalsRow = [
       "", "", "", "",
       "TOTALS", "", "",
       "", "", "",
-      filteredBatches.reduce((s, b) => s + (Number(b.quantity_issued) || 0), 0),
-      reconciledOnly.reduce((s, b) => s + (Number(b.printed_cards) || 0), 0),
-      reconciledOnly.reduce((s, b) => s + (Number(b.damaged_cards) || 0), 0),
-      reconciledOnly.reduce((s, b) => s + (Number(b.recapture_cards) || 0), 0),
-      reconciledOnly.reduce((s, b) => s + (Number(b.unaccounted) || 0), 0),
-      "", "", "", "", "", "",
+      tab1Totals.totalCollected,
+      tab1Totals.totalPrinted,
+      tab1Totals.totalDamaged,
+      tab1Totals.totalRecapture,
+      "",
+      tab1Totals.netYield !== "—" ? `${tab1Totals.netYield}%` : "—",
+      "", "", "", "", "",
     ];
 
     const wsWd = XLSX.utils.aoa_to_sheet([wdHeaders, ...wdRows, totalsRow]);
@@ -468,7 +533,7 @@ export default function ReportsPage() {
     wsWd["!rows"] = [{ hpt: 28 }, ...wdRows.map(() => ({ hpt: 20 })), { hpt: 24 }];
     XLSX.utils.book_append_sheet(wb, wsWd, "Collected & Work Done");
 
-    XLSX.writeFile(wb, `DVLA_Consumables_Report_${dateStr}.xlsx`);
+    XLSX.writeFile(wb, `DVLA_Consumables_Report_${dateFrom || "Start"}_to_${dateTo || dateStr}.xlsx`);
   };
 
   const hasActiveFilters =
@@ -482,12 +547,31 @@ export default function ReportsPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header and Global Actions */}
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+        {/* Printable DVLA Header (Visible only when printing) */}
+        <div className="hidden print:block pb-4 mb-4 border-b-2 border-slate-800">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-black text-slate-900 tracking-tight">DRIVER & VEHICLE LICENSING AUTHORITY (DVLA)</h1>
+              <h2 className="text-sm font-bold text-slate-700">CONSUMABLES MANAGEMENT & PRODUCTION AUDIT REPORT</h2>
+              <div className="text-xs text-slate-500 mt-1 flex gap-3">
+                <span><strong>Station:</strong> {selectedStation === "all" ? "All DVLA Stations" : selectedStation}</span>
+                <span><strong>Category:</strong> {selectedCategory === "all" ? "All Categories" : selectedCategory}</span>
+                <span><strong>Date Period:</strong> {dateFrom ? `${dateFrom} to ${dateTo || "Today"}` : "All Recorded Dates"}</span>
+              </div>
+            </div>
+            <div className="text-right text-xs text-slate-400">
+              <div>Generated: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString()}</div>
+              <div>Confidential Management Report</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Header and Global Actions (Hidden in Print) */}
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 print:hidden">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">System & Production Reports</h1>
             <p className="text-sm text-slate-500">
-              Track stock levels, consumable collections, and reconciliation of returned work done across DVLA stations.
+              Audit stock usage, consumable collections, and production yield across DVLA stations.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -519,7 +603,7 @@ export default function ReportsPage() {
         </div>
 
         {/* Overview Summary KPI Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 print:grid-cols-3">
           {/* Total Items */}
           <Card className="border-slate-200 bg-white shadow-xs">
             <CardContent className="p-3.5">
@@ -620,8 +704,8 @@ export default function ReportsPage() {
           </Card>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-slate-200 gap-2">
+        {/* Navigation Tabs (Hidden in Print) */}
+        <div className="flex border-b border-slate-200 gap-2 print:hidden">
           <button
             onClick={() => setActiveTab("work_done")}
             className={`pb-3 px-4 text-sm font-bold border-b-2 flex items-center gap-2 transition-colors ${
@@ -657,22 +741,27 @@ export default function ReportsPage() {
           </button>
         </div>
 
-        {/* Comprehensive Filters Bar */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        {/* COMPREHENSIVE FILTERS BAR WITH ADVANCED DATE RANGE FILTERING (Hidden in Print) */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-4 print:hidden">
+          {/* Row 1: Search, Station, Category, and Work Status */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-12 gap-3 items-end">
             {/* Search */}
-            <div className="relative lg:col-span-2">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <Input
-                placeholder="Search items, codes, officers, stations..."
-                className="pl-9 bg-slate-50 border-slate-200 focus:bg-white text-xs h-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="lg:col-span-4 space-y-1">
+              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Search Records</Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Input
+                  placeholder="Search item code, description, officer, batch..."
+                  className="pl-9 bg-slate-50 border-slate-200 focus:bg-white text-xs h-9"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
             </div>
 
             {/* Station Filter */}
-            <div>
+            <div className="lg:col-span-3 space-y-1">
+              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Station</Label>
               <Select value={selectedStation} onValueChange={setSelectedStation}>
                 <SelectTrigger className="bg-slate-50 text-xs h-9">
                   <SelectValue placeholder="All Stations" />
@@ -689,7 +778,8 @@ export default function ReportsPage() {
             </div>
 
             {/* Category Filter */}
-            <div>
+            <div className="lg:col-span-3 space-y-1">
+              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Category / Type</Label>
               <Select value={selectedCategory} onValueChange={setSelectedCategory}>
                 <SelectTrigger className="bg-slate-50 text-xs h-9">
                   <SelectValue placeholder="All Categories" />
@@ -705,9 +795,10 @@ export default function ReportsPage() {
               </Select>
             </div>
 
-            {/* Status Filter (Active for Work Done tab) */}
+            {/* Status Filter (Work Done tab) or Reset */}
             {activeTab === "work_done" ? (
-              <div>
+              <div className="lg:col-span-2 space-y-1">
+                <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Reconciled Status</Label>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
                   <SelectTrigger className="bg-slate-50 text-xs h-9">
                     <SelectValue placeholder="Status" />
@@ -720,53 +811,135 @@ export default function ReportsPage() {
                 </Select>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
-                <Input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="bg-slate-50 text-xs h-9"
-                  title="Date From"
-                />
+              <div className="lg:col-span-2 flex items-end">
+                {hasActiveFilters && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResetFilters}
+                    className="h-9 w-full text-xs text-slate-600 hover:text-slate-900 border border-slate-200"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                    Reset Filters
+                  </Button>
+                )}
               </div>
             )}
+          </div>
 
-            {/* Date To / Clear */}
+          {/* Row 2: Date Range Filter Section */}
+          <div className="pt-3 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            {/* Quick Date Presets */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-semibold text-slate-500 mr-1 flex items-center gap-1">
+                <Calendar className="h-3.5 w-3.5 text-dvla-green" /> Date Period:
+              </span>
+              {(
+                [
+                  { id: "all", label: "All Time" },
+                  { id: "today", label: "Today" },
+                  { id: "week", label: "This Week" },
+                  { id: "month", label: "This Month" },
+                  { id: "quarter", label: "This Quarter" },
+                  { id: "year", label: "This Year" },
+                ] as const
+              ).map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => handleApplyPreset(preset.id)}
+                  type="button"
+                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all ${
+                    activePreset === preset.id && !dateFrom && !dateTo && preset.id === "all"
+                      ? "bg-dvla-green text-white shadow-xs"
+                      : activePreset === preset.id && preset.id !== "all"
+                      ? "bg-dvla-green text-white shadow-xs"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Date Range Pickers (Start Date & End Date) */}
             <div className="flex items-center gap-2">
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="bg-slate-50 text-xs h-9 flex-1"
-                title="Date To"
-              />
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="dateFrom" className="text-xs text-slate-500 font-medium">From:</Label>
+                <Input
+                  id="dateFrom"
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => handleCustomDateChange(e.target.value, dateTo)}
+                  className="bg-slate-50 text-xs h-8.5 w-36"
+                  title="Filter start date"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="dateTo" className="text-xs text-slate-500 font-medium">To:</Label>
+                <Input
+                  id="dateTo"
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => handleCustomDateChange(dateFrom, e.target.value)}
+                  className="bg-slate-50 text-xs h-8.5 w-36"
+                  title="Filter end date"
+                />
+              </div>
+
               {hasActiveFilters && (
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
                   onClick={handleResetFilters}
-                  className="h-9 px-2 text-xs text-slate-500 hover:text-slate-800"
-                  title="Clear all filters"
+                  className="h-8.5 px-2.5 text-xs text-slate-600 hover:text-slate-900 border-slate-300"
+                  title="Reset all filters"
                 >
-                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                  <RotateCcw className="h-3 w-3 mr-1" />
                   Reset
                 </Button>
               )}
             </div>
           </div>
+
+          {/* Active Filter Summary Strip */}
+          {(dateFrom || dateTo || selectedStation !== "all" || selectedCategory !== "all") && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
+              <span className="font-semibold text-slate-700">Active Scope:</span>
+              {dateFrom || dateTo ? (
+                <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 font-mono text-[10px]">
+                  Period: {dateFrom || "Earliest"} → {dateTo || "Latest"}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px]">
+                  Period: All Dates
+                </Badge>
+              )}
+              {selectedStation !== "all" && (
+                <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200 text-[10px]">
+                  Station: {selectedStation}
+                </Badge>
+              )}
+              {selectedCategory !== "all" && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
+                  Category: {selectedCategory}
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* TAB 1: Collected Consumables & Work Done */}
+        {/* TAB 1: Collected Consumables & Work Done Table (NO ACTION COLUMN) */}
         {activeTab === "work_done" && (
           <Card className="shadow-xs border-slate-200">
             <CardHeader className="bg-slate-50/80 border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
                   <FileText className="h-4 w-4 text-dvla-green" />
-                  Consumable Collections & Returned Work Done
+                  Consumable Collections & Returned Work Done Report
                 </CardTitle>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Detailed breakdown of consumables collected, production output, spoilage, and net yield.
+                  Production report showing collected batches, work completed (cards printed), damaged spoilage, and net yield rates.
                 </p>
               </div>
               <span className="text-xs font-semibold text-slate-500">
@@ -777,36 +950,42 @@ export default function ReportsPage() {
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-slate-50/50">
-                      <TableHead className="font-bold text-slate-700">Date</TableHead>
+                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
+                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
+                      <TableHead className="font-bold text-slate-700">Date Issued</TableHead>
                       <TableHead className="font-bold text-slate-700">Batch Code</TableHead>
-                      <TableHead className="font-bold text-slate-700">Consumable Collected</TableHead>
+                      <TableHead className="font-bold text-slate-700">Consumable Item</TableHead>
+                      <TableHead className="font-bold text-slate-700">Category</TableHead>
+                      <TableHead className="font-bold text-slate-700">Station / Dept</TableHead>
                       <TableHead className="font-bold text-slate-700">Collected By</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Qty Collected</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Work Done (Printed)</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Damaged</TableHead>
+                      <TableHead className="text-right font-bold text-slate-700">Recaptured</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Yield %</TableHead>
-                      <TableHead className="font-bold text-slate-700">Status</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Action</TableHead>
+                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loading ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
+                        <TableCell colSpan={13} className="text-center py-10 text-slate-500">
                           <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-2" />
-                          Loading work reconciliation data...
+                          Loading work reconciliation report data...
                         </TableCell>
                       </TableRow>
                     ) : filteredBatches.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
-                          No collected consumable batches match your search or filters.
+                        <TableCell colSpan={13} className="text-center py-10 text-slate-500">
+                          No collected consumable records match your selected date range or filters.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredBatches.map((b) => (
-                        <TableRow key={b.id} className="hover:bg-slate-50/70 border-b border-slate-100">
+                      filteredBatches.map((b, idx) => (
+                        <TableRow key={b.id} className="hover:bg-slate-50/70 border-b border-slate-100 transition-colors">
+                          <TableCell className="text-center font-mono text-xs text-slate-400">
+                            {idx + 1}
+                          </TableCell>
                           <TableCell className="text-xs text-slate-600 whitespace-nowrap">
                             {b.date_issued}
                           </TableCell>
@@ -820,28 +999,43 @@ export default function ReportsPage() {
                           </TableCell>
                           <TableCell>
                             <div className="font-semibold text-slate-900 text-sm">{b.item_name}</div>
-                            <div className="text-[11px] text-slate-500">{b.category_name || b.item_code}</div>
+                            <div className="text-[11px] font-mono text-slate-500">{b.item_code}</div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="bg-slate-50 font-medium text-[11px] text-slate-600">
+                              {b.category_name || "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs text-slate-700">
+                            <div className="font-medium">{b.station_name || "Head Office"}</div>
+                            {b.department_name && <div className="text-slate-400 text-[11px]">{b.department_name}</div>}
                           </TableCell>
                           <TableCell className="text-sm font-medium text-slate-800">
-                            <div>{b.issued_to}</div>
-                            {b.station_name && <div className="text-[11px] text-slate-400">{b.station_name}</div>}
+                            {b.issued_to}
                           </TableCell>
-                          <TableCell className="text-right font-extrabold text-slate-900 text-sm">
+                          <TableCell className="text-right font-extrabold text-slate-900 text-sm whitespace-nowrap">
                             {(Number(b.quantity_issued) || 0).toLocaleString()}{" "}
                             <span className="text-xs font-normal text-slate-400">{b.unit}</span>
                           </TableCell>
-                          <TableCell className="text-right font-bold text-emerald-700 text-sm">
+                          <TableCell className="text-right font-bold text-emerald-700 text-sm whitespace-nowrap">
                             {b.status === "Reconciled" ? (
                               `${(Number(b.printed_cards) || 0).toLocaleString()} ${b.unit}`
                             ) : (
-                              <span className="text-slate-400 font-normal italic">Pending work</span>
+                              <span className="text-slate-400 font-normal italic">Pending</span>
                             )}
                           </TableCell>
-                          <TableCell className="text-right text-sm">
+                          <TableCell className="text-right text-sm whitespace-nowrap">
                             {b.status === "Reconciled" ? (
                               <span className={(Number(b.damaged_cards) || 0) > 0 ? "font-bold text-red-600" : "text-slate-400"}>
                                 {(Number(b.damaged_cards) || 0).toLocaleString()}
                               </span>
+                            ) : (
+                              <span className="text-slate-400 font-normal">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-sm text-slate-600 whitespace-nowrap">
+                            {b.status === "Reconciled" ? (
+                              (Number(b.recapture_cards) || 0).toLocaleString()
                             ) : (
                               <span className="text-slate-400 font-normal">—</span>
                             )}
@@ -863,54 +1057,68 @@ export default function ReportsPage() {
                               <span className="text-slate-400 font-normal">—</span>
                             )}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">
                             <Badge
                               variant="outline"
                               className={
                                 b.status === "Reconciled"
                                   ? "bg-emerald-50 text-emerald-800 border-emerald-200 font-semibold"
-                                  : "bg-amber-50 text-amber-800 border-amber-200 font-semibold flex items-center gap-1 w-fit"
+                                  : "bg-amber-50 text-amber-800 border-amber-200 font-semibold flex items-center gap-1 mx-auto w-fit"
                               }
                             >
                               {b.status === "Pending" ? <Clock className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
                               {b.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              variant={b.status === "Pending" ? "default" : "outline"}
-                              className={
-                                b.status === "Pending"
-                                  ? "bg-dvla-green hover:bg-dvla-green-light text-white text-xs font-semibold h-8"
-                                  : "text-xs text-slate-600 hover:text-slate-900 h-8"
-                              }
-                              onClick={() => openReconcile(b)}
-                            >
-                              {b.status === "Pending" ? "Record Work Done" : "View / Edit"}
-                            </Button>
-                          </TableCell>
                         </TableRow>
                       ))
                     )}
                   </TableBody>
+                  {/* Table Summary Footer */}
+                  {filteredBatches.length > 0 && (
+                    <TableFooter className="bg-slate-100/80 border-t-2 border-slate-300 font-bold">
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-slate-800 text-xs uppercase tracking-wider font-extrabold">
+                          Total Period Summary ({filteredBatches.length} batches)
+                        </TableCell>
+                        <TableCell className="text-right font-black text-slate-900 text-sm">
+                          {tab1Totals.totalCollected.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-emerald-800 text-sm">
+                          {tab1Totals.totalPrinted.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-red-600 text-sm">
+                          {tab1Totals.totalDamaged.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-slate-700 text-sm">
+                          {tab1Totals.totalRecapture.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-dvla-green text-sm">
+                          {tab1Totals.netYield !== "—" ? `${tab1Totals.netYield}%` : "—"}
+                        </TableCell>
+                        <TableCell className="text-center text-xs text-slate-500 font-normal">
+                          {filteredBatches.filter((b) => b.status === "Reconciled").length} Reconciled
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  )}
                 </Table>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* TAB 2: Stock & Inventory Balances */}
+        {/* TAB 2: Stock & Inventory Balances Table */}
         {activeTab === "inventory" && (
           <Card className="shadow-xs border-slate-200">
             <CardHeader className="bg-slate-50/80 border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
                   <Layers className="h-4 w-4 text-dvla-green" />
-                  Consumable Stock Usage & Balances
+                  Consumable Stock Usage & Balances Report
                 </CardTitle>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Detailed view of consumable inventory, total receipts, issuances, and balance on hand.
+                  Consolidated inventory register displaying intake receipts, issues for the period, and current balance on hand.
                 </p>
               </div>
               <span className="text-xs font-semibold text-slate-500">
@@ -921,54 +1129,66 @@ export default function ReportsPage() {
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-slate-50/50">
+                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
+                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
                       <TableHead className="font-bold text-slate-700">Code</TableHead>
                       <TableHead className="font-bold text-slate-700">Item Name</TableHead>
                       <TableHead className="font-bold text-slate-700">Category</TableHead>
-                      <TableHead className="font-bold text-slate-700">Station</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Received</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Issued</TableHead>
+                      <TableHead className="font-bold text-slate-700">Station / Dept</TableHead>
+                      <TableHead className="text-right font-bold text-slate-700">Received (Period)</TableHead>
+                      <TableHead className="text-right font-bold text-slate-700">Issued (Period)</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Current Balance</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Reorder Threshold</TableHead>
-                      <TableHead className="font-bold text-slate-700">Status</TableHead>
+                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loading ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center py-10 text-slate-500">
+                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
                           <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-2" />
                           Loading inventory balances...
                         </TableCell>
                       </TableRow>
                     ) : filteredUsage.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center py-10 text-slate-500">
+                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
                           No inventory records match your criteria.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredUsage.map((item) => (
-                        <TableRow key={item.id} className="hover:bg-slate-50/70 border-b border-slate-100">
+                      filteredUsage.map((item, idx) => (
+                        <TableRow key={item.id} className="hover:bg-slate-50/70 border-b border-slate-100 transition-colors">
+                          <TableCell className="text-center font-mono text-xs text-slate-400">
+                            {idx + 1}
+                          </TableCell>
                           <TableCell className="font-mono text-xs font-semibold text-slate-700">
                             {item.item_code}
                           </TableCell>
                           <TableCell className="font-semibold text-slate-900">{item.name}</TableCell>
-                          <TableCell className="text-slate-600 text-xs">{item.category}</TableCell>
-                          <TableCell className="text-slate-600 text-xs">{item.station || "Head Office"}</TableCell>
-                          <TableCell className="text-right font-medium text-slate-700">
-                            {(Number(item.received) || 0).toLocaleString()} {item.unit}
+                          <TableCell>
+                            <Badge variant="outline" className="bg-slate-50 font-medium text-[11px] text-slate-600">
+                              {item.category}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-slate-600 text-xs">
+                            <div>{item.station || "Head Office"}</div>
+                            {item.department && <div className="text-slate-400 text-[11px]">{item.department}</div>}
                           </TableCell>
                           <TableCell className="text-right font-medium text-slate-700">
-                            {(Number(item.issued) || 0).toLocaleString()} {item.unit}
+                            {(Number(item.received) || 0).toLocaleString()} <span className="text-[10px] text-slate-400">{item.unit}</span>
                           </TableCell>
-                          <TableCell className="text-right font-extrabold text-slate-900 text-base">
-                            {(Number(item.balance) || 0).toLocaleString()} {item.unit}
+                          <TableCell className="text-right font-medium text-slate-700">
+                            {(Number(item.issued) || 0).toLocaleString()} <span className="text-[10px] text-slate-400">{item.unit}</span>
+                          </TableCell>
+                          <TableCell className="text-right font-black text-slate-900 text-base">
+                            {(Number(item.balance) || 0).toLocaleString()}{" "}
+                            <span className="text-xs font-normal text-slate-500">{item.unit}</span>
                           </TableCell>
                           <TableCell className="text-right font-medium text-slate-500 text-sm">
                             {(Number(item.reorder_level) || 0).toLocaleString()} {item.unit}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="text-center">
                             <Badge
                               variant="outline"
                               className={
@@ -986,13 +1206,35 @@ export default function ReportsPage() {
                       ))
                     )}
                   </TableBody>
+                  {/* Table Summary Footer */}
+                  {filteredUsage.length > 0 && (
+                    <TableFooter className="bg-slate-100/80 border-t-2 border-slate-300 font-bold">
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-slate-800 text-xs uppercase tracking-wider font-extrabold">
+                          Total Period Stock Metrics ({filteredUsage.length} items)
+                        </TableCell>
+                        <TableCell className="text-right font-black text-slate-900 text-sm">
+                          {tab2Totals.totalReceived.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-slate-900 text-sm">
+                          {tab2Totals.totalIssued.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-emerald-800 text-base">
+                          {tab2Totals.totalBalance.toLocaleString()}
+                        </TableCell>
+                        <TableCell colSpan={2} className="text-center text-xs text-slate-500 font-normal">
+                          Inventory Healthy
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  )}
                 </Table>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* TAB 3: Low Stock Alerts */}
+        {/* TAB 3: Low Stock Alerts Table */}
         {activeTab === "low_stock" && (
           <Card className="shadow-xs border-slate-200">
             <CardHeader className="bg-amber-50/60 border-b border-amber-200 pb-3 flex flex-row items-center justify-between">
@@ -1002,7 +1244,7 @@ export default function ReportsPage() {
                   Critical & Low Stock Items Needing Reorder
                 </CardTitle>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  Consumables that have fallen below their configured safety reorder thresholds.
+                  Consumables currently below their configured safety reorder thresholds. Immediate procurement action recommended.
                 </p>
               </div>
               <span className="text-xs font-bold text-amber-800">
@@ -1013,217 +1255,84 @@ export default function ReportsPage() {
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-slate-50/50">
-                      <TableHead className="font-bold text-slate-700">Item</TableHead>
+                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
+                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
+                      <TableHead className="font-bold text-slate-700">Code & Item</TableHead>
                       <TableHead className="font-bold text-slate-700">Category</TableHead>
-                      <TableHead className="font-bold text-slate-700">Location</TableHead>
+                      <TableHead className="font-bold text-slate-700">Location / Station</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Current Balance</TableHead>
                       <TableHead className="text-right font-bold text-slate-700">Reorder Threshold</TableHead>
-                      <TableHead className="font-bold text-slate-700">Status</TableHead>
+                      <TableHead className="text-right font-bold text-slate-700">Deficit / Shortfall</TableHead>
+                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {lowStockItems.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-10 text-slate-500">
+                        <TableCell colSpan={8} className="text-center py-10 text-slate-500">
                           <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
                           All consumables are currently at healthy inventory levels! No low stock alerts.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      lowStockItems.map((item) => (
-                        <TableRow key={item.id} className="hover:bg-slate-50 border-b border-slate-100">
-                          <TableCell>
-                            <div className="font-semibold text-slate-900">{item.name}</div>
-                            <div className="text-[11px] font-mono text-slate-500">{item.item_code}</div>
-                          </TableCell>
-                          <TableCell className="text-xs text-slate-600">{item.category}</TableCell>
-                          <TableCell className="text-xs text-slate-600">{item.station || "Head Office"}</TableCell>
-                          <TableCell className="text-right font-extrabold text-red-600 text-base">
-                            {(Number(item.balance) || 0).toLocaleString()} {item.unit}
-                          </TableCell>
-                          <TableCell className="text-right font-medium text-slate-600">
-                            {(Number(item.reorder_level) || 0).toLocaleString()} {item.unit}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="destructive" className="bg-red-600 text-white font-bold">
-                              {item.status}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))
+                      lowStockItems.map((item, idx) => {
+                        const deficit = (Number(item.reorder_level) || 0) - (Number(item.balance) || 0);
+                        return (
+                          <TableRow key={item.id} className="hover:bg-slate-50 border-b border-slate-100">
+                            <TableCell className="text-center font-mono text-xs text-slate-400">
+                              {idx + 1}
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-semibold text-slate-900">{item.name}</div>
+                              <div className="text-[11px] font-mono text-slate-500">{item.item_code}</div>
+                            </TableCell>
+                            <TableCell className="text-xs text-slate-600">{item.category}</TableCell>
+                            <TableCell className="text-xs text-slate-600">{item.station || "Head Office"}</TableCell>
+                            <TableCell className="text-right font-extrabold text-red-600 text-base">
+                              {(Number(item.balance) || 0).toLocaleString()} {item.unit}
+                            </TableCell>
+                            <TableCell className="text-right font-medium text-slate-600">
+                              {(Number(item.reorder_level) || 0).toLocaleString()} {item.unit}
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-amber-700">
+                              {deficit > 0 ? `-${deficit.toLocaleString()} ${item.unit}` : "0"}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant="destructive" className="bg-red-600 text-white font-bold">
+                                {item.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
                     )}
                   </TableBody>
+                  {/* Table Summary Footer */}
+                  {lowStockItems.length > 0 && (
+                    <TableFooter className="bg-red-50/80 border-t-2 border-red-200 font-bold">
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-red-900 text-xs uppercase tracking-wider font-extrabold">
+                          Total Procurement Reorder Deficit ({lowStockItems.length} items flagged)
+                        </TableCell>
+                        <TableCell className="text-right font-black text-red-700 text-base">
+                          {tab3Totals.totalBalance.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-slate-700 text-sm">
+                          {tab3Totals.totalReorder.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-black text-red-700 text-base">
+                          {tab3Totals.totalDeficit > 0 ? `-${tab3Totals.totalDeficit.toLocaleString()}` : "0"}
+                        </TableCell>
+                        <TableCell className="text-center text-xs text-red-600 font-semibold">
+                          Action Required
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  )}
                 </Table>
               </div>
             </CardContent>
           </Card>
-        )}
-
-        {/* RECONCILIATION MODAL (Record Returned Work Done) */}
-        {reconcilingBatch && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-              <div className="flex justify-between items-start border-b pb-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-dvla-green uppercase bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      {reconcilingBatch.batch_code}
-                    </span>
-                    <Badge variant="outline">{reconcilingBatch.status}</Badge>
-                  </div>
-                  <h3 className="text-lg font-bold text-slate-900 mt-1">
-                    Record Work Done for {reconcilingBatch.item_name}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Collected by <strong className="text-slate-700">{reconcilingBatch.issued_to}</strong> on {reconcilingBatch.date_issued}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setReconcilingBatch(null)}
-                  className="text-slate-400 hover:text-slate-700 text-xl font-bold"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              {reconcileMsg && (
-                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-xl text-sm font-semibold flex items-center gap-2">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                  <span>{reconcileMsg}</span>
-                </div>
-              )}
-
-              {/* Summary Stats */}
-              <div className="grid grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
-                <div>
-                  <span className="text-[11px] text-slate-500 font-medium uppercase">Total Collected</span>
-                  <p className="text-xl font-extrabold text-slate-900">{reconcilingBatch.quantity_issued}</p>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 font-medium uppercase">Expected Units</span>
-                  <p className="text-xl font-extrabold text-blue-700">{reconcilingBatch.quantity_issued}</p>
-                </div>
-                <div>
-                  <span className="text-[11px] text-slate-500 font-medium uppercase">Unit Type</span>
-                  <p className="text-xl font-extrabold text-slate-700">{reconcilingBatch.unit}</p>
-                </div>
-              </div>
-
-              <form onSubmit={handleSaveReconcile} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Cards Printed / Successful Output */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Work Completed / Cards Printed <span className="text-red-500">*</span>
-                    </Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max={reconcilingBatch.quantity_issued}
-                      placeholder="e.g. 480"
-                      value={printedCards}
-                      onChange={(e) => setPrintedCards(e.target.value)}
-                      required
-                      className="font-bold text-emerald-700"
-                    />
-                  </div>
-
-                  {/* Damaged Cards / Spoilage */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Damaged / Defective Output
-                    </Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={damagedCards}
-                      onChange={(e) => setDamagedCards(e.target.value)}
-                      className="font-bold text-red-600"
-                    />
-                  </div>
-
-                  {/* Recaptured Cards */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Recaptured / Reprocessed
-                    </Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={recaptureCards}
-                      onChange={(e) => setRecaptureCards(e.target.value)}
-                    />
-                  </div>
-
-                  {/* Returned to Stock (Unused) */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Unused Returned to Stock
-                    </Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={returnedToStock}
-                      onChange={(e) => setReturnedToStock(e.target.value)}
-                    />
-                    <p className="text-[10px] text-slate-400">Credited back to inventory balance.</p>
-                  </div>
-
-                  {/* Damage Reason */}
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Reason for Damage / Defect (If Any)
-                    </Label>
-                    <Input
-                      placeholder="e.g. Printer feeder jam, lamination defect, barcode misprint"
-                      value={damageReason}
-                      onChange={(e) => setDamageReason(e.target.value)}
-                    />
-                  </div>
-
-                  {/* General Work Notes */}
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Work Completion Notes & Remarks
-                    </Label>
-                    <Input
-                      placeholder="e.g. License numbers GHA-001 to GHA-480 printed successfully"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setReconcilingBatch(null)}
-                    disabled={reconcileSubmitting}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={reconcileSubmitting}
-                    className="bg-dvla-green hover:bg-dvla-green-light text-white font-semibold"
-                  >
-                    {reconcileSubmitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Reconciliation...
-                      </>
-                    ) : (
-                      "Save & Reconcile Work Done"
-                    )}
-                  </Button>
-                </div>
-              </form>
-            </div>
-          </div>
         )}
       </div>
     </DashboardLayout>

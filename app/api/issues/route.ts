@@ -3,6 +3,9 @@ import { query, execute, queryOne } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth";
 import { logAudit, getClientIp } from "@/lib/audit";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // ── GET /api/issues ───────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const session = await getSessionFromRequest(req);
@@ -18,7 +21,7 @@ export async function GET(req: NextRequest) {
   const limit = parseInt(searchParams.get("limit") || "50");
   const offset = (page - 1) * limit;
 
-  const conditions: string[] = [];
+  const conditions: string[] = ["c.is_active = 1"];
   const params: unknown[] = [];
 
   if (search) {
@@ -134,10 +137,17 @@ export async function POST(req: NextRequest) {
      remarks || null, date_issued, newBalance]
   );
 
-  // Auto-create tracking batch if purpose = printing or tracking requested
+  // Auto-create tracking batch if purpose = printing or category purpose is printing or tracking requested
   let batchId: number | null = null;
   const recipient = issued_to || receiving_officer || "Station Officer";
-  if (purpose === "printing" || body.track_work) {
+
+  const catObj = await queryOne<{ purpose: string }>(
+    `SELECT purpose FROM categories WHERE id = ?`,
+    [consumable.category_id]
+  );
+  const isPrintingPurpose = purpose === "printing" || catObj?.purpose === "printing" || Boolean(body.track_work);
+
+  if (isPrintingPurpose) {
     const batchCode = `BATCH-${new Date().getFullYear()}-${issueResult.insertId}`;
     const batchResult = await execute(
       `INSERT INTO card_printing_batches

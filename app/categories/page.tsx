@@ -13,7 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Search, Download, RefreshCw, Loader2, ArrowUpRight, FileSignature, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Search, Download, RefreshCw, Loader2, ArrowUpRight, FileSignature, Trash2, ChevronLeft, ChevronRight, PackageOpen, Plus, AlertCircle, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { IssueStockModal } from "@/components/IssueStockModal";
 import { ReconciliationModal } from "@/components/ReconciliationModal";
@@ -46,6 +48,8 @@ interface StockIssueRecord {
 interface Category {
   id: number;
   name: string;
+  code_prefix?: string;
+  item_count?: number;
 }
 
 function CategoriesContent() {
@@ -63,6 +67,13 @@ function CategoriesContent() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  // Manage Consumable Types Modal State
+  const [manageTypesOpen, setManageTypesOpen] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [addingCat, setAddingCat] = useState(false);
+  const [deletingCatId, setDeletingCatId] = useState<number | null>(null);
+  const [typeMsg, setTypeMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Sync state if category param in URL changes
   useEffect(() => {
@@ -125,6 +136,74 @@ function CategoriesContent() {
     }
   };
 
+  const handleAddCategory = async () => {
+    const trimmed = newCatName.trim();
+    if (!trimmed) return;
+    setTypeMsg(null);
+    setAddingCat(true);
+    try {
+      const res = await fetch("/api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: trimmed,
+          code_prefix: trimmed.slice(0, 3).toUpperCase(),
+          purpose: "standard",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add consumable type.");
+      setTypeMsg({ type: "success", text: `Consumable type "${trimmed}" created successfully!` });
+      setNewCatName("");
+      await loadIssuedRecords();
+    } catch (err: unknown) {
+      setTypeMsg({ type: "error", text: err instanceof Error ? err.message : "Error creating category." });
+    } finally {
+      setAddingCat(false);
+    }
+  };
+
+  const handleDeleteCategory = async (cat: Category) => {
+    if (!confirm(`Are you sure you want to delete consumable type "${cat.name}"?`)) return;
+    setTypeMsg(null);
+    setDeletingCatId(cat.id);
+    try {
+      const res = await fetch("/api/categories", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: cat.id, name: cat.name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) {
+          const proceed = confirm(
+            `${data.error}\n\nDo you want to archive all linked consumable items and delete consumable type "${cat.name}"?`
+          );
+          if (proceed) {
+            const forceRes = await fetch("/api/categories", {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: cat.id, name: cat.name, force: true }),
+            });
+            const forceData = await forceRes.json();
+            if (!forceRes.ok) throw new Error(forceData.error || `Cannot delete "${cat.name}".`);
+            setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" and linked items archived.` });
+            await loadIssuedRecords();
+            return;
+          }
+          return;
+        }
+        throw new Error(data.error || `Cannot delete "${cat.name}".`);
+      }
+      setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" deleted successfully.` });
+      await loadIssuedRecords();
+    } catch (err: unknown) {
+      setTypeMsg({ type: "error", text: err instanceof Error ? err.message : `Cannot delete "${cat.name}".` });
+    } finally {
+      setDeletingCatId(null);
+    }
+  };
+
   const handleExport = () => {
     if (issues.length === 0) {
       alert("No dispatch records available to export. All records have been deleted or none exist.");
@@ -166,6 +245,15 @@ function CategoriesContent() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              onClick={() => { setManageTypesOpen(true); setTypeMsg(null); }}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 border-slate-300 text-slate-700 hover:text-slate-900"
+            >
+              <PackageOpen className="h-4 w-4 text-dvla-green" />
+              Manage Consumable Types
+            </Button>
             <Button onClick={handleExport} variant="outline" size="sm" className="h-9 gap-1.5 border-slate-300 text-slate-700">
               <Download className="h-4 w-4" />
               Export Issued Logs
@@ -417,6 +505,110 @@ function CategoriesContent() {
             </div>
           </div>
         </div>
+
+        {/* Modal: Manage Consumable Types */}
+        <Dialog open={manageTypesOpen} onOpenChange={setManageTypesOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-slate-900">
+                <PackageOpen className="h-5 w-5 text-dvla-green" />
+                Manage Consumable Types
+              </DialogTitle>
+              <DialogDescription>
+                Add new consumable types or delete unused types from the system.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 pt-2">
+              {typeMsg && (
+                <div
+                  className={`flex items-start gap-2 p-3 rounded-lg text-xs font-medium ${
+                    typeMsg.type === "success"
+                      ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                      : "bg-red-50 border border-red-200 text-red-700"
+                  }`}
+                >
+                  {typeMsg.type === "success" ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
+                  )}
+                  <span className="leading-relaxed">{typeMsg.text}</span>
+                </div>
+              )}
+
+              {/* Add New Consumable Type */}
+              <div className="flex items-end gap-2">
+                <div className="space-y-1.5 flex-1">
+                  <Label htmlFor="typeInput" className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    New Type Name
+                  </Label>
+                  <Input
+                    id="typeInput"
+                    placeholder="e.g. Laminating Pouches"
+                    value={newCatName}
+                    onChange={(e) => setNewCatName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAddCategory())}
+                    disabled={addingCat}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <Button
+                  onClick={handleAddCategory}
+                  disabled={addingCat || !newCatName.trim()}
+                  className="bg-dvla-green hover:bg-dvla-green-light text-white h-9 shrink-0 font-semibold gap-1 text-xs"
+                >
+                  {addingCat ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  Add Type
+                </Button>
+              </div>
+
+              {/* Active Consumable Types List */}
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Active Consumable Types ({categories.length})
+                </Label>
+                <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white">
+                  {categories.map((cat) => (
+                    <div
+                      key={cat.id}
+                      className="flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-800">{cat.name}</span>
+                        {cat.code_prefix && (
+                          <Badge variant="outline" className="bg-slate-50 font-mono text-[10px] text-slate-500">
+                            {cat.code_prefix}
+                          </Badge>
+                        )}
+                        <Badge variant="secondary" className="text-[10px] font-normal text-slate-600 bg-slate-100">
+                          {cat.item_count ? `${cat.item_count} items` : "0 items"}
+                        </Badge>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        title={`Delete consumable type "${cat.name}"`}
+                        disabled={deletingCatId === cat.id}
+                        onClick={() => handleDeleteCategory(cat)}
+                      >
+                        {deletingCatId === cat.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin text-red-500" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
+                  ))}
+                  {categories.length === 0 && (
+                    <div className="p-4 text-center text-xs text-slate-500">No consumable types found.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

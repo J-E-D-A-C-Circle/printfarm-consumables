@@ -3,12 +3,15 @@ import { queryOne, execute } from "@/lib/db";
 import { getSessionFromRequest } from "@/lib/auth";
 import { logAudit, getClientIp } from "@/lib/audit";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // ── PUT /api/batches/[id] — Submit reconciliation ─────────────────────────────
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const allowedRoles = ["Administrator", "Supervisor", "Store Officer"];
+  const allowedRoles = ["Administrator", "Supervisor", "Store Officer", "Station Officer"];
   if (!allowedRoles.includes(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -17,16 +20,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const batch = await queryOne<{
     id: number; batch_code: string; status: string;
     quantity_issued: number; consumable_id: number;
+    issue_id: number | null;
   }>(
-    `SELECT id, batch_code, status, quantity_issued, consumable_id
+    `SELECT id, batch_code, status, quantity_issued, consumable_id, issue_id
      FROM card_printing_batches WHERE id = ?`,
     [id]
   );
 
   if (!batch) return NextResponse.json({ error: "Batch not found." }, { status: 404 });
-  if (batch.status === "Reconciled") {
-    return NextResponse.json({ error: "Batch already reconciled." }, { status: 409 });
-  }
 
   const body = await req.json();
   const {
