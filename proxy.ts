@@ -2,52 +2,65 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getSessionFromRequest, hasMinRole } from "@/lib/auth";
 
-// Routes that don't require authentication
-const PUBLIC_ROUTES = ["/login"];
-
-// Routes restricted to Administrator role only
-const ADMIN_ONLY = ["/settings", "/audit", "/api/users"];
-
-// Routes restricted to Supervisor+ (Supervisor or Administrator)
-const SUPERVISOR_PLUS = ["/api/issues/authorize", "/api/adjustments"];
+const PUBLIC_PATHS = ["/login", "/api/auth"];
+const ADMIN_ONLY_PATHS = ["/settings", "/api/users"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public routes and Next.js internals
+  // Allow static assets & Next.js internals
   if (
-    PUBLIC_ROUTES.some((r) => pathname.startsWith(r)) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
-    pathname.startsWith("/uploads")
+    pathname === "/oop.png" ||
+    pathname.endsWith(".png") ||
+    pathname.endsWith(".jpg") ||
+    pathname.endsWith(".svg") ||
+    pathname.endsWith(".ico")
   ) {
     return NextResponse.next();
   }
 
-  // Verify session
   const session = await getSessionFromRequest(request);
 
+  // If visiting /login while already signed in, redirect to Dashboard
+  if (pathname.startsWith("/login")) {
+    if (session) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+    return NextResponse.next();
+  }
+
+  // Allow public auth endpoints
+  if (PUBLIC_PATHS.some((r) => pathname.startsWith(r))) {
+    return NextResponse.next();
+  }
+
+  // Require authentication for all other routes
   if (!session) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("from", pathname);
+    if (pathname !== "/") {
+      loginUrl.searchParams.set("from", pathname);
+    }
     return NextResponse.redirect(loginUrl);
   }
 
-  // Admin-only routes
-  if (ADMIN_ONLY.some((r) => pathname.startsWith(r))) {
+  // Admin-only routes (/settings and /api/users)
+  if (ADMIN_ONLY_PATHS.some((r) => pathname.startsWith(r))) {
     if (!hasMinRole(session, "Administrator")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      if (pathname.startsWith("/api/")) {
+        return NextResponse.json(
+          { error: "Forbidden: Administrator role required." },
+          { status: 403 }
+        );
+      }
+      return NextResponse.redirect(new URL("/?access=denied", request.url));
     }
   }
 
-  // Supervisor+ routes
-  if (SUPERVISOR_PLUS.some((r) => pathname.startsWith(r))) {
-    if (!hasMinRole(session, "Supervisor")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  }
-
-  // Pass session user info as headers to API routes
   const response = NextResponse.next();
   response.headers.set("x-user-id", String(session.id));
   response.headers.set("x-user-role", session.role);
@@ -57,7 +70,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|public).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

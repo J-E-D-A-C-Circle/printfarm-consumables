@@ -1,12 +1,18 @@
 "use client";
 
 import { DashboardLayout } from "@/components/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -17,192 +23,116 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  FileText,
   Printer,
   Search,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
   RefreshCw,
   Loader2,
   FileSpreadsheet,
   CheckSquare,
   Layers,
-  BarChart3,
   TrendingUp,
   Package,
   RotateCcw,
-  Calendar,
-  Filter,
-  ArrowRight,
+  BarChart3,
+  PieChart,
+  Users,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx-js-style";
-
-interface UsageItem {
-  id: number;
-  item_code: string;
-  name: string;
-  category: string;
-  station: string | null;
-  department: string | null;
-  unit: string;
-  received: number;
-  issued: number;
-  balance: number;
-  reorder_level: number;
-  status: string;
-}
-
-interface BatchItem {
-  id: number;
-  batch_code: string;
-  date_issued: string;
-  issued_to: string;
-  quantity_issued: number;
-  status: "Pending" | "Reconciled" | "Voided";
-  printed_cards: number;
-  damaged_cards: number;
-  recapture_cards: number;
-  unaccounted: number;
-  yield_percentage: number | null;
-  waste_percentage: number | null;
-  reconciled_at: string | null;
-  date_of_reconciliation: string | null;
-  reason_for_damage: string | null;
-  notes: string | null;
-  item_name: string;
-  item_code: string;
-  unit: string;
-  category_name?: string;
-  issue_reference?: string;
-  station_name?: string;
-  department_name?: string;
-  reconciled_by_name?: string;
-}
-
-interface UsageSummary {
-  total_items: number;
-  total_balance: number;
-  total_received: number;
-  total_issued: number;
-  low_stock: number;
-  out_of_stock: number;
-}
-
-interface YieldSummary {
-  total_batches: number;
-  pending_batches: number;
-  reconciled_batches: number;
-  total_issued: number;
-  total_printed: number;
-  total_damaged: number;
-  total_recapture: number;
-  total_unaccounted: number;
-  avg_yield: number;
-  avg_waste: number;
-}
-
-interface StationOption {
-  id: number;
-  name: string;
-}
-
-interface CategoryOption {
-  id: number;
-  name: string;
-}
+import { ReturnSheetRecord } from "@/components/ReconciliationModal";
 
 type DatePreset = "all" | "today" | "week" | "month" | "quarter" | "year" | "custom";
 
+const CHART_COLORS = [
+  "#004D2C",
+  "#2563EB",
+  "#D97706",
+  "#7C3AED",
+  "#0D9488",
+  "#475569",
+];
+
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function formatShortDate(dateStr?: string | null) {
+  if (!dateStr) return "";
+  const clean = dateStr.slice(0, 10);
+  const parts = clean.split("-");
+  if (parts.length !== 3) return clean;
+  return `${parts[2]}/${parts[1]}/${parts[0].slice(2)}`;
+}
+
+function formatMonthBucketLabel(ym: string) {
+  const parts = ym.split("-");
+  if (parts.length < 2) return ym;
+  const yr = parts[0].slice(2);
+  const mIdx = parseInt(parts[1], 10) - 1;
+  return `${MONTH_NAMES[mIdx] || parts[1]} '${yr}`;
+}
+
 export default function ReportsPage() {
-  const [activeTab, setActiveTab] = useState<"work_done" | "inventory" | "low_stock">("work_done");
-  const [usageItems, setUsageItems] = useState<UsageItem[]>([]);
-  const [batches, setBatches] = useState<BatchItem[]>([]);
-  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
-  const [yieldSummary, setYieldSummary] = useState<YieldSummary | null>(null);
+  const [activeTab, setActiveTab] = useState<"return_sheet" | "type_summary" | "personnel">("return_sheet");
+  const [trendMode, setTrendMode] = useState<"consumption" | "quantities">("consumption");
+  const [rightChartMode, setRightChartMode] = useState<"types" | "distribution" | "officers">("types");
+  const [hoveredMonthIdx, setHoveredMonthIdx] = useState<number | null>(null);
+
+  const [records, setRecords] = useState<ReturnSheetRecord[]>([]);
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filter options
-  const [stations, setStations] = useState<StationOption[]>([]);
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
-
-  // Active Filters
+  // Filters
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [selectedStation, setSelectedStation] = useState("all");
   const [selectedCategory, setSelectedCategory] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [activePreset, setActivePreset] = useState<DatePreset>("all");
 
-  // Load dropdown options for filters
   useEffect(() => {
-    async function loadOptions() {
-      try {
-        const [stRes, catRes] = await Promise.all([
-          fetch("/api/stations"),
-          fetch("/api/categories"),
-        ]);
-        if (stRes.ok) {
-          const d = await stRes.json();
-          setStations(d.data || []);
-        }
-        if (catRes.ok) {
-          const d = await catRes.json();
-          setCategories(d.data || []);
-        }
-      } catch (err) {
-        console.error("Failed to load station/category filter options:", err);
-      }
-    }
-    loadOptions();
+    fetch("/api/categories")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((d) => setCategories(d.data || []))
+      .catch(() => {});
   }, []);
 
-  const fetchReports = useCallback(async () => {
-    setLoading(true);
+  const fetchReports = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (selectedStation && selectedStation !== "all") params.set("station", selectedStation);
-      if (selectedCategory && selectedCategory !== "all") params.set("category", selectedCategory);
+      if (selectedCategory !== "all") params.set("category", selectedCategory);
+      if (statusFilter !== "all") params.set("status", statusFilter);
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       params.set("_t", Date.now().toString());
-      const queryStr = `?${params.toString()}`;
+      const qs = `?${params.toString()}`;
 
-      const [usageRes, yieldRes] = await Promise.all([
-        fetch(`/api/reports/usage${queryStr}`, {
-          cache: "no-store",
-          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        }),
-        fetch(`/api/reports/yield${queryStr}`, {
-          cache: "no-store",
-          headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        }),
-      ]);
-
-      if (usageRes.ok) {
-        const u = await usageRes.json();
-        setUsageItems(u.data || []);
-        if (u.summary) setUsageSummary(u.summary);
-      }
+      const yieldRes = await fetch(`/api/reports/yield${qs}`, { cache: "no-store" });
       if (yieldRes.ok) {
         const y = await yieldRes.json();
-        setBatches(y.data || []);
-        if (y.summary) setYieldSummary(y.summary);
+        setRecords(y.data || []);
       }
     } catch (err) {
       console.error("Failed to load reports:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [selectedStation, selectedCategory, dateFrom, dateTo]);
+  }, [selectedCategory, statusFilter, dateFrom, dateTo]);
 
   useEffect(() => {
-    fetchReports();
+    fetchReports(false);
   }, [fetchReports]);
 
-  // Handle Preset Date selection
+  // Subtle background auto-sync every 20s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchReports(true);
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [fetchReports]);
+
   const handleApplyPreset = (preset: DatePreset) => {
     setActivePreset(preset);
     const now = new Date();
@@ -218,31 +148,27 @@ export default function ReportsPage() {
       setDateTo("");
       return;
     }
-
     if (preset === "today") {
       const today = toISO(now);
       setDateFrom(today);
       setDateTo(today);
       return;
     }
-
     if (preset === "week") {
       const d = new Date(now);
       const day = d.getDay();
-      const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
+      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
       const monday = new Date(d.setDate(diff));
       setDateFrom(toISO(monday));
       setDateTo(toISO(now));
       return;
     }
-
     if (preset === "month") {
       const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
       setDateFrom(toISO(firstDay));
       setDateTo(toISO(now));
       return;
     }
-
     if (preset === "quarter") {
       const qMonth = Math.floor(now.getMonth() / 3) * 3;
       const firstDay = new Date(now.getFullYear(), qMonth, 1);
@@ -250,7 +176,6 @@ export default function ReportsPage() {
       setDateTo(toISO(now));
       return;
     }
-
     if (preset === "year") {
       const firstDay = new Date(now.getFullYear(), 0, 1);
       setDateFrom(toISO(firstDay));
@@ -259,533 +184,562 @@ export default function ReportsPage() {
     }
   };
 
-  const handleCustomDateChange = (from: string, to: string) => {
-    setActivePreset("custom");
-    setDateFrom(from);
-    setDateTo(to);
-  };
-
   const handleResetFilters = () => {
     setSearchTerm("");
-    setStatusFilter("all");
-    setSelectedStation("all");
     setSelectedCategory("all");
+    setStatusFilter("all");
     setDateFrom("");
     setDateTo("");
     setActivePreset("all");
   };
 
-  // Filtered lists with null-safe accessors
-  const filteredBatches = useMemo(() => {
-    return batches.filter((b) => {
-      const search = searchTerm.toLowerCase();
-      const matchesSearch =
-        (b.item_name || "").toLowerCase().includes(search) ||
-        (b.batch_code || "").toLowerCase().includes(search) ||
-        (b.issued_to || "").toLowerCase().includes(search) ||
-        (b.station_name || "").toLowerCase().includes(search) ||
-        (b.issue_reference || "").toLowerCase().includes(search);
-      const matchesStatus = statusFilter === "all" || b.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [batches, searchTerm, statusFilter]);
-
-  const filteredUsage = useMemo(() => {
-    return usageItems.filter((i) => {
-      const search = searchTerm.toLowerCase();
+  // Filtered Return Sheet rows
+  const filteredRecords = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return records.filter((r) => {
+      if (!q) return true;
       return (
-        (i.name || "").toLowerCase().includes(search) ||
-        (i.item_code || "").toLowerCase().includes(search) ||
-        (i.category || "").toLowerCase().includes(search) ||
-        (i.station || "").toLowerCase().includes(search) ||
-        (i.department || "").toLowerCase().includes(search)
+        (r.consumable_name || "").toLowerCase().includes(q) ||
+        (r.reference_number || "").toLowerCase().includes(q) ||
+        (r.requested_by || "").toLowerCase().includes(q) ||
+        (r.issued_by || "").toLowerCase().includes(q) ||
+        (r.received_by || "").toLowerCase().includes(q)
       );
     });
-  }, [usageItems, searchTerm]);
+  }, [records, searchTerm]);
 
-  const lowStockItems = useMemo(() => {
-    return usageItems.filter(
-      (i) => i.status === "LOW STOCK" || i.status === "OUT OF STOCK"
-    );
-  }, [usageItems]);
+  // ── LIVE KPIs ─────────────────────────────────────────────────────────────
+  const liveKpis = useMemo(() => {
+    const totalRequests = filteredRecords.length;
+    let pendingIssueCount = 0;
+    let issuedPendingReturnCount = 0;
+    let completedCount = 0;
 
-  // Tab 1 Calculated Totals
-  const tab1Totals = useMemo(() => {
-    const totalCollected = filteredBatches.reduce((acc, b) => acc + (Number(b.quantity_issued) || 0), 0);
-    const totalPrinted = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.printed_cards) || 0) : 0), 0);
-    const totalDamaged = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.damaged_cards) || 0) : 0), 0);
-    const totalRecapture = filteredBatches.reduce((acc, b) => acc + (b.status === "Reconciled" ? (Number(b.recapture_cards) || 0) : 0), 0);
-    const netYield = totalCollected > 0 && totalPrinted > 0 ? ((totalPrinted / totalCollected) * 100).toFixed(1) : "—";
-    return { totalCollected, totalPrinted, totalDamaged, totalRecapture, netYield };
-  }, [filteredBatches]);
+    let totalReqQty = 0;
+    let totalIssQty = 0;
+    let completedIssQty = 0;
+    let totalConsumption = 0;
 
-  // Tab 2 Calculated Totals
-  const tab2Totals = useMemo(() => {
-    const totalReceived = filteredUsage.reduce((acc, i) => acc + (Number(i.received) || 0), 0);
-    const totalIssued = filteredUsage.reduce((acc, i) => acc + (Number(i.issued) || 0), 0);
-    const totalBalance = filteredUsage.reduce((acc, i) => acc + (Number(i.balance) || 0), 0);
-    return { totalReceived, totalIssued, totalBalance };
-  }, [filteredUsage]);
+    let exactIssuedCount = 0;
+    let moreIssuedCount = 0;
+    let lessIssuedCount = 0;
 
-  // Tab 3 Calculated Totals
-  const tab3Totals = useMemo(() => {
-    const totalBalance = lowStockItems.reduce((acc, i) => acc + (Number(i.balance) || 0), 0);
-    const totalReorder = lowStockItems.reduce((acc, i) => acc + (Number(i.reorder_level) || 0), 0);
-    const totalDeficit = lowStockItems.reduce((acc, i) => {
-      const def = (Number(i.reorder_level) || 0) - (Number(i.balance) || 0);
-      return acc + (def > 0 ? def : 0);
-    }, 0);
-    return { totalBalance, totalReorder, totalDeficit };
-  }, [lowStockItems]);
+    filteredRecords.forEach((r) => {
+      const reqQ = Number(r.quantity_requested ?? 0);
+      const hasIssued = r.quantity_issued !== null && r.quantity_issued !== undefined;
+      const issQ = hasIssued ? Number(r.quantity_issued) : 0;
+      const hasCons = r.total_consumption !== null && r.total_consumption !== undefined;
+      const consQ = hasCons ? Number(r.total_consumption) : 0;
 
-  // Full Excel Export
+      totalReqQty += reqQ;
+      totalIssQty += issQ;
+      totalConsumption += consQ;
+
+      if (r.status === "Pending Issue") {
+        pendingIssueCount++;
+      } else if (r.status === "Issued") {
+        issuedPendingReturnCount++;
+      } else {
+        completedCount++;
+        completedIssQty += issQ;
+      }
+
+      if (hasIssued) {
+        const diff = issQ - reqQ;
+        if (diff === 0) exactIssuedCount++;
+        else if (diff > 0) moreIssuedCount++;
+        else lessIssuedCount++;
+      }
+    });
+
+    const fulfillmentRate =
+      totalReqQty > 0 ? Math.round((totalIssQty / totalReqQty) * 100) : 0;
+    const avgYieldPerIssuedUnit =
+      completedIssQty > 0
+        ? Math.round(totalConsumption / completedIssQty)
+        : totalIssQty > 0
+        ? Math.round(totalConsumption / totalIssQty)
+        : 0;
+
+    return {
+      totalRequests,
+      pendingIssueCount,
+      issuedPendingReturnCount,
+      completedCount,
+      totalReqQty,
+      totalIssQty,
+      totalConsumption,
+      exactIssuedCount,
+      moreIssuedCount,
+      lessIssuedCount,
+      fulfillmentRate,
+      avgYieldPerIssuedUnit,
+    };
+  }, [filteredRecords]);
+
+  // ── DYNAMIC CONSUMABLE TYPE ANALYTICS ─────────────────────────────────────
+  const dynamicTypeStats = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string;
+        requests: number;
+        issuedPending: number;
+        completed: number;
+        requestedQty: number;
+        issuedQty: number;
+        completedIssuedQty: number;
+        consumption: number;
+      }
+    >();
+
+    const baseTypes =
+      selectedCategory === "all"
+        ? categories.map((c) => c.name)
+        : [selectedCategory];
+
+    baseTypes.forEach((tName) => {
+      if (!tName) return;
+      map.set(tName.toLowerCase(), {
+        name: tName,
+        requests: 0,
+        issuedPending: 0,
+        completed: 0,
+        requestedQty: 0,
+        issuedQty: 0,
+        completedIssuedQty: 0,
+        consumption: 0,
+      });
+    });
+
+    filteredRecords.forEach((r) => {
+      const key = (r.consumable_name || "Unknown").toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          name: r.consumable_name || "Unknown",
+          requests: 0,
+          issuedPending: 0,
+          completed: 0,
+          requestedQty: 0,
+          issuedQty: 0,
+          completedIssuedQty: 0,
+          consumption: 0,
+        });
+      }
+      const entry = map.get(key)!;
+      const reqQ = Number(r.quantity_requested ?? 0);
+      const issQ = Number(r.quantity_issued ?? 0);
+      const consQ = Number(r.total_consumption ?? 0);
+
+      entry.requests += 1;
+      entry.requestedQty += reqQ;
+      entry.issuedQty += issQ;
+      entry.consumption += consQ;
+
+      if (r.status === "Issued") entry.issuedPending += 1;
+      else if (r.status === "Completed") {
+        entry.completed += 1;
+        entry.completedIssuedQty += issQ;
+      }
+    });
+
+    return Array.from(map.values()).map((item, idx) => {
+      const avgYield =
+        item.completedIssuedQty > 0
+          ? Math.round(item.consumption / item.completedIssuedQty)
+          : item.issuedQty > 0
+          ? Math.round(item.consumption / item.issuedQty)
+          : 0;
+      const consumptionShare =
+        liveKpis.totalConsumption > 0
+          ? Math.round((item.consumption / liveKpis.totalConsumption) * 100)
+          : 0;
+      const hex = CHART_COLORS[idx % CHART_COLORS.length];
+
+      return {
+        ...item,
+        avgYield,
+        consumptionShare,
+        hex,
+      };
+    });
+  }, [filteredRecords, categories, selectedCategory, liveKpis.totalConsumption]);
+
+  // ── DYNAMIC MONTHLY TIMELINE ──────────────────────────────────────────────
+  const timelineSeries = useMemo(() => {
+    const buckets = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        requests: number;
+        requestedQty: number;
+        issuedQty: number;
+        consumption: number;
+      }
+    >();
+
+    filteredRecords.forEach((r) => {
+      const rawDate = (r.date_requested || "").slice(0, 10);
+      if (!rawDate) return;
+      const ym = rawDate.slice(0, 7);
+      if (!buckets.has(ym)) {
+        buckets.set(ym, {
+          key: ym,
+          label: formatMonthBucketLabel(ym),
+          requests: 0,
+          requestedQty: 0,
+          issuedQty: 0,
+          consumption: 0,
+        });
+      }
+      const b = buckets.get(ym)!;
+      b.requests += 1;
+      b.requestedQty += Number(r.quantity_requested ?? 0);
+      b.issuedQty += Number(r.quantity_issued ?? 0);
+      b.consumption += Number(r.total_consumption ?? 0);
+    });
+
+    return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [filteredRecords]);
+
+  // ── PERSONNEL STATS ───────────────────────────────────────────────────────
+  const personnelStats = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string;
+        batches: number;
+        completedBatches: number;
+        requestedQty: number;
+        issuedQty: number;
+        consumption: number;
+        typesSet: Set<string>;
+      }
+    >();
+
+    filteredRecords.forEach((r) => {
+      const rawName = (r.requested_by || "").trim().toUpperCase();
+      if (!rawName) return;
+      if (!map.has(rawName)) {
+        map.set(rawName, {
+          name: rawName,
+          batches: 0,
+          completedBatches: 0,
+          requestedQty: 0,
+          issuedQty: 0,
+          consumption: 0,
+          typesSet: new Set(),
+        });
+      }
+      const p = map.get(rawName)!;
+      p.batches += 1;
+      if (r.status === "Completed") p.completedBatches += 1;
+      p.requestedQty += Number(r.quantity_requested ?? 0);
+      p.issuedQty += Number(r.quantity_issued ?? 0);
+      p.consumption += Number(r.total_consumption ?? 0);
+      if (r.consumable_name) p.typesSet.add(r.consumable_name);
+    });
+
+    return Array.from(map.values())
+      .map((p) => ({
+        ...p,
+        typesList: Array.from(p.typesSet),
+      }))
+      .sort((a, b) => b.consumption - a.consumption || b.issuedQty - a.issuedQty);
+  }, [filteredRecords]);
+
+  // ── EXCEL EXPORT (.xlsx) ──────────────────────────────────────────────────
   const handleExportExcel = () => {
-    if (usageItems.length === 0 && batches.length === 0) {
+    if (filteredRecords.length === 0) {
       alert("No report data available to export.");
       return;
     }
 
     const wb = XLSX.utils.book_new();
-    const dateStr = new Date().toISOString().split("T")[0];
+    const borderAll = {
+      top: { style: "thin", color: { rgb: "94A3B8" } },
+      bottom: { style: "thin", color: { rgb: "94A3B8" } },
+      left: { style: "thin", color: { rgb: "94A3B8" } },
+      right: { style: "thin", color: { rgb: "94A3B8" } },
+    };
 
-    const headerStyle = {
-      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
+    const bannerStyle = {
+      font: { bold: true, sz: 11, color: { rgb: "0F172A" } },
+      fill: { fgColor: { rgb: "E2E8F0" }, patternType: "solid" },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: borderAll,
+    };
+
+    const colHeaderStyle = {
+      font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } },
       fill: { fgColor: { rgb: "1B5E20" }, patternType: "solid" },
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
-      border: {
-        top: { style: "thin", color: { rgb: "CCCCCC" } },
-        bottom: { style: "thin", color: { rgb: "CCCCCC" } },
-        left: { style: "thin", color: { rgb: "CCCCCC" } },
-        right: { style: "thin", color: { rgb: "CCCCCC" } },
-      },
+      border: borderAll,
     };
-    const rowStyle = {
-      font: { sz: 10 },
-      alignment: { vertical: "center", wrapText: false },
-      border: {
-        top: { style: "hair", color: { rgb: "E0E0E0" } },
-        bottom: { style: "hair", color: { rgb: "E0E0E0" } },
-        left: { style: "thin", color: { rgb: "CCCCCC" } },
-        right: { style: "thin", color: { rgb: "CCCCCC" } },
-      },
+
+    const cellStyle = {
+      font: { sz: 10, color: { rgb: "0F172A" } },
+      alignment: { vertical: "center", horizontal: "left" },
+      border: borderAll,
     };
-    const altRowStyle = {
-      ...rowStyle,
-      fill: { fgColor: { rgb: "F1F8E9" }, patternType: "solid" },
+
+    const numCellStyle = {
+      font: { sz: 10, color: { rgb: "0F172A" } },
+      alignment: { vertical: "center", horizontal: "center" },
+      border: borderAll,
     };
-    const totalStyle = {
-      font: { bold: true, sz: 11, color: { rgb: "1B5E20" } },
+
+    const totalRowStyle = {
+      font: { bold: true, sz: 10, color: { rgb: "1B5E20" } },
       fill: { fgColor: { rgb: "E8F5E9" }, patternType: "solid" },
-      alignment: { horizontal: "center", vertical: "center" },
-      border: {
-        top: { style: "medium", color: { rgb: "1B5E20" } },
-        bottom: { style: "medium", color: { rgb: "1B5E20" } },
-        left: { style: "thin", color: { rgb: "CCCCCC" } },
-        right: { style: "thin", color: { rgb: "CCCCCC" } },
-      },
+      alignment: { vertical: "center", horizontal: "center" },
+      border: borderAll,
     };
-    const numStyle = { ...rowStyle, alignment: { horizontal: "center", vertical: "center" } };
-    const numStyleAlt = { ...altRowStyle, alignment: { horizontal: "center", vertical: "center" } };
-    const numTotal = { ...totalStyle, alignment: { horizontal: "center", vertical: "center" } };
 
-    // SHEET 1: Stock & Inventory Balances
-    const invHeaders = [
-      "No.", "Item Code", "Consumable Name", "Category",
-      "Station", "Department", "Unit",
-      "Received Qty", "Issued Qty", "Current Balance",
-      "Reorder Threshold", "Status",
+    const row0 = [
+      "CONSUMABLES REQUEST",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "PRODUCTION RESULT",
+      "",
+    ];
+    const row1 = [
+      "DATE REQUESTED",
+      "CONSUMABLE TYPE",
+      "QUANTITY REQUESTED",
+      "QUANTITY ISSUED",
+      "ISSUED BY",
+      "REQUESTED BY",
+      "RECEIVED BY",
+      "DATE RETURNED",
+      "TOTAL CONSUMPTION",
     ];
 
-    const invRows = filteredUsage.map((item, idx) => [
-      idx + 1,
-      item.item_code,
-      item.name,
-      item.category,
-      item.station || "Head Office",
-      item.department || "—",
-      item.unit,
-      Number(item.received) || 0,
-      Number(item.issued) || 0,
-      Number(item.balance) || 0,
-      Number(item.reorder_level) || 0,
-      item.status,
-    ]);
-
-    const totalsInvRow = [
-      "", "", "TOTALS", "", "", "", "",
-      tab2Totals.totalReceived,
-      tab2Totals.totalIssued,
-      tab2Totals.totalBalance,
-      "", "",
-    ];
-
-    const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows, totalsInvRow]);
-
-    invHeaders.forEach((_, ci) => {
-      const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-      if (wsInv[addr]) wsInv[addr].s = headerStyle;
-    });
-    const numColsInv = [7, 8, 9, 10];
-    invRows.forEach((row, ri) => {
-      const style = ri % 2 === 0 ? rowStyle : altRowStyle;
-      row.forEach((_, ci) => {
-        const addr = XLSX.utils.encode_cell({ r: ri + 1, c: ci });
-        if (wsInv[addr]) wsInv[addr].s = numColsInv.includes(ci) ? (ri % 2 === 0 ? numStyle : numStyleAlt) : style;
-      });
-    });
-
-    const totalsInvRowIdx = invRows.length + 1;
-    totalsInvRow.forEach((_, ci) => {
-      const addr = XLSX.utils.encode_cell({ r: totalsInvRowIdx, c: ci });
-      if (wsInv[addr]) wsInv[addr].s = numColsInv.includes(ci) ? numTotal : totalStyle;
-    });
-
-    wsInv["!cols"] = [
-      { wch: 5 }, { wch: 14 }, { wch: 28 }, { wch: 18 },
-      { wch: 18 }, { wch: 16 }, { wch: 8 },
-      { wch: 13 }, { wch: 12 }, { wch: 16 },
-      { wch: 18 }, { wch: 13 },
-    ];
-    wsInv["!rows"] = [{ hpt: 28 }, ...invRows.map(() => ({ hpt: 20 })), { hpt: 24 }];
-    XLSX.utils.book_append_sheet(wb, wsInv, "Stock & Inventory");
-
-    // SHEET 2: Collected Consumables & Work Done
-    const wdHeaders = [
-      "No.", "Date Collected", "Batch / Ref Code", "Issue Reference",
-      "Consumable Item", "Item Code", "Category",
-      "Collected By (Officer)", "Station", "Department",
-      "Qty Collected", "Work Done (Produced)", "Damaged / Waste",
-      "Recaptured", "Unaccounted",
-      "Yield %", "Waste %",
-      "Status", "Date Reconciled", "Reconciled By",
-      "Notes / Damage Reason",
-    ];
-
-    const wdRows = filteredBatches.map((b, idx) => [
-      idx + 1,
-      b.date_issued,
-      b.batch_code,
-      b.issue_reference || "—",
-      b.item_name,
-      b.item_code,
-      b.category_name || "—",
-      b.issued_to,
-      b.station_name || "Head Office",
-      b.department_name || "—",
-      Number(b.quantity_issued) || 0,
-      b.status === "Reconciled" ? (Number(b.printed_cards) || 0) : "Pending",
-      b.status === "Reconciled" ? (Number(b.damaged_cards) || 0) : "Pending",
-      b.status === "Reconciled" ? (Number(b.recapture_cards) || 0) : "Pending",
-      b.status === "Reconciled" ? (Number(b.unaccounted) || 0) : "Pending",
-      b.yield_percentage !== null ? `${b.yield_percentage}%` : "Pending",
-      b.waste_percentage !== null ? `${b.waste_percentage}%` : "Pending",
-      b.status,
-      b.date_of_reconciliation || "Pending",
-      b.reconciled_by_name || "—",
-      [b.reason_for_damage, b.notes].filter(Boolean).join(" | ") || "—",
+    const dataRows = filteredRecords.map((rec) => [
+      formatShortDate(rec.date_requested),
+      rec.consumable_name,
+      Number(rec.quantity_requested ?? 0),
+      rec.quantity_issued !== null && rec.quantity_issued !== undefined
+        ? Number(rec.quantity_issued)
+        : "",
+      rec.issued_by || "",
+      rec.requested_by || "",
+      rec.received_by || "",
+      formatShortDate(rec.date_returned),
+      rec.total_consumption !== null && rec.total_consumption !== undefined
+        ? Number(rec.total_consumption)
+        : "",
     ]);
 
     const totalsRow = [
-      "", "", "", "",
-      "TOTALS", "", "",
-      "", "", "",
-      tab1Totals.totalCollected,
-      tab1Totals.totalPrinted,
-      tab1Totals.totalDamaged,
-      tab1Totals.totalRecapture,
+      "TOTAL",
+      `${filteredRecords.length} Records`,
+      liveKpis.totalReqQty,
+      liveKpis.totalIssQty,
       "",
-      tab1Totals.netYield !== "—" ? `${tab1Totals.netYield}%` : "—",
-      "", "", "", "", "",
+      "",
+      "",
+      "",
+      liveKpis.totalConsumption,
     ];
 
-    const wsWd = XLSX.utils.aoa_to_sheet([wdHeaders, ...wdRows, totalsRow]);
+    const aoa = [row0, row1, ...dataRows, totalsRow];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-    wdHeaders.forEach((_, ci) => {
-      const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-      if (wsWd[addr]) wsWd[addr].s = headerStyle;
-    });
-    const numColsWd = [10, 11, 12, 13, 14];
-    wdRows.forEach((row, ri) => {
-      const even = ri % 2 === 0;
-      row.forEach((_, ci) => {
-        const addr = XLSX.utils.encode_cell({ r: ri + 1, c: ci });
-        if (wsWd[addr]) wsWd[addr].s = numColsWd.includes(ci)
-          ? (even ? numStyle : numStyleAlt)
-          : (even ? rowStyle : altRowStyle);
-      });
-    });
-    const totalsRowIdx = wdRows.length + 1;
-    totalsRow.forEach((_, ci) => {
-      const addr = XLSX.utils.encode_cell({ r: totalsRowIdx, c: ci });
-      if (wsWd[addr]) wsWd[addr].s = numColsWd.includes(ci) ? numTotal : totalStyle;
-    });
-
-    wsWd["!cols"] = [
-      { wch: 5 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
-      { wch: 26 }, { wch: 13 }, { wch: 16 },
-      { wch: 22 }, { wch: 18 }, { wch: 16 },
-      { wch: 14 }, { wch: 20 }, { wch: 16 },
-      { wch: 13 }, { wch: 14 },
-      { wch: 10 }, { wch: 10 },
-      { wch: 14 }, { wch: 16 }, { wch: 18 },
-      { wch: 36 },
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } },
     ];
-    wsWd["!rows"] = [{ hpt: 28 }, ...wdRows.map(() => ({ hpt: 20 })), { hpt: 24 }];
-    XLSX.utils.book_append_sheet(wb, wsWd, "Collected & Work Done");
 
-    XLSX.writeFile(wb, `DVLA_Consumables_Report_${dateFrom || "Start"}_to_${dateTo || dateStr}.xlsx`);
+    ws["!cols"] = [
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 17 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 24 },
+      { wch: 16 },
+      { wch: 20 },
+    ];
+
+    const range = XLSX.utils.decode_range(ws["!ref"] || "A1:I2");
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const ref = XLSX.utils.encode_cell({ r: R, c: C });
+        if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+        if (R === 0) ws[ref].s = bannerStyle;
+        else if (R === 1) ws[ref].s = colHeaderStyle;
+        else if (R === aoa.length - 1) ws[ref].s = totalRowStyle;
+        else if (C === 2 || C === 3 || C === 8) ws[ref].s = numCellStyle;
+        else ws[ref].s = cellStyle;
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, "CONSUMABLES RETURN SHEET");
+
+    const dateStr = new Date().toISOString().split("T")[0];
+    XLSX.writeFile(wb, `DVLA_Consumables_Return_Report_${dateStr}.xlsx`);
   };
 
   const hasActiveFilters =
     Boolean(searchTerm) ||
-    statusFilter !== "all" ||
-    selectedStation !== "all" ||
     selectedCategory !== "all" ||
+    statusFilter !== "all" ||
     Boolean(dateFrom) ||
     Boolean(dateTo);
 
+  const maxTrendConsumption = Math.max(1, ...timelineSeries.map((m) => m.consumption));
+  const maxTrendQty = Math.max(
+    1,
+    ...timelineSeries.map((m) => Math.max(m.requestedQty, m.issuedQty))
+  );
+  const maxTypeConsumption = Math.max(1, ...dynamicTypeStats.map((t) => t.consumption));
+  const maxOfficerConsumption = Math.max(1, ...personnelStats.map((p) => p.consumption));
+
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        {/* Printable DVLA Header (Visible only when printing) */}
-        <div className="hidden print:block pb-4 mb-4 border-b-2 border-slate-800">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-xl font-black text-slate-900 tracking-tight">DRIVER & VEHICLE LICENSING AUTHORITY (DVLA)</h1>
-              <h2 className="text-sm font-bold text-slate-700">CONSUMABLES MANAGEMENT & PRODUCTION AUDIT REPORT</h2>
-              <div className="text-xs text-slate-500 mt-1 flex gap-3">
-                <span><strong>Station:</strong> {selectedStation === "all" ? "All DVLA Stations" : selectedStation}</span>
-                <span><strong>Category:</strong> {selectedCategory === "all" ? "All Categories" : selectedCategory}</span>
-                <span><strong>Date Period:</strong> {dateFrom ? `${dateFrom} to ${dateTo || "Today"}` : "All Recorded Dates"}</span>
-              </div>
-            </div>
-            <div className="text-right text-xs text-slate-400">
-              <div>Generated: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString()}</div>
-              <div>Confidential Management Report</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Header and Global Actions (Hidden in Print) */}
+      <div className="space-y-8">
+        {/* ── CLEAN PAGE HEADER ───────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 print:hidden">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">System & Production Reports</h1>
-            <p className="text-sm text-slate-500">
-              Audit stock usage, consumable collections, and production yield across DVLA stations.
+            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
+              Reports & Analytics
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Overview of consumable requests, issued quantities, and production consumption.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+
+          <div className="flex flex-wrap items-center gap-2.5">
             <Button
               variant="outline"
+              size="sm"
               onClick={() => window.print()}
-              className="gap-2 border-slate-300 text-slate-700 h-9"
+              className="gap-2 border-slate-200 text-slate-600 h-9 font-normal"
             >
               <Printer className="h-4 w-4" />
-              Print Report
+              Print
             </Button>
+
             <Button
+              size="sm"
               onClick={handleExportExcel}
-              className="bg-dvla-green hover:bg-dvla-green-light text-white gap-2 font-semibold shadow-sm h-9"
+              className="bg-dvla-green hover:bg-dvla-green-light text-white gap-2 font-medium h-9"
             >
               <FileSpreadsheet className="h-4 w-4 text-dvla-gold" />
               Export Excel (.xlsx)
             </Button>
+
             <Button
               variant="outline"
               size="icon"
-              onClick={fetchReports}
-              title="Refresh Report Data"
-              className="h-9 w-9 text-slate-600"
+              onClick={() => fetchReports(false)}
+              title="Refresh Report"
+              className="h-9 w-9 border-slate-200 text-slate-500"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             </Button>
           </div>
         </div>
 
-        {/* Overview Summary KPI Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 print:grid-cols-3">
-          {/* Total Items */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Consumables</span>
+        {/* ── SPACIOUS 4-CARD KPI SUMMARY ─────────────────────────────────── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Total Requests</span>
                 <Package className="h-4 w-4 text-slate-400" />
               </div>
-              <p className="text-2xl font-black text-slate-900">
-                {usageSummary ? usageSummary.total_items : usageItems.length}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Active catalog items</p>
-            </CardContent>
-          </Card>
-
-          {/* Current Stock Balance */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Total In Stock</span>
-                <Layers className="h-4 w-4 text-dvla-green" />
+              <div className="text-2xl font-semibold text-slate-900">
+                {liveKpis.totalRequests.toLocaleString()}
               </div>
-              <p className="text-2xl font-black text-slate-900">
-                {usageSummary
-                  ? Number(usageSummary.total_balance).toLocaleString()
-                  : usageItems.reduce((acc, i) => acc + (Number(i.balance) || 0), 0).toLocaleString()}
+              <p className="text-xs text-slate-500 mt-2">
+                {liveKpis.completedCount} completed • {liveKpis.issuedPendingReturnCount} in production
               </p>
-              <p className="text-[11px] text-emerald-600 font-medium mt-0.5">Available units</p>
             </CardContent>
           </Card>
 
-          {/* Batches Tracked */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Batches Issued</span>
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Quantity Requested</span>
+                <Layers className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="text-2xl font-semibold text-slate-900">
+                {liveKpis.totalReqQty.toLocaleString()}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Across {dynamicTypeStats.filter((t) => t.requests > 0).length} active consumable types
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Quantity Issued</span>
                 <CheckSquare className="h-4 w-4 text-blue-600" />
               </div>
-              <p className="text-2xl font-black text-slate-900">
-                {yieldSummary ? yieldSummary.total_batches : batches.length}
-              </p>
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
-                <span className="text-emerald-700 font-semibold">
-                  {yieldSummary ? yieldSummary.reconciled_batches : batches.filter((b) => b.status === "Reconciled").length} Reconciled
+              <div className="flex items-baseline gap-2.5">
+                <span className="text-2xl font-semibold text-slate-900">
+                  {liveKpis.totalIssQty.toLocaleString()}
+                </span>
+                <span className="text-xs text-blue-600 font-normal">
+                  ({liveKpis.fulfillmentRate}% of requested)
                 </span>
               </div>
+              <p className="text-xs text-slate-500 mt-2">
+                {liveKpis.exactIssuedCount} exact • {liveKpis.moreIssuedCount} more • {liveKpis.lessIssuedCount} less
+              </p>
             </CardContent>
           </Card>
 
-          {/* Cards Produced / Work Done */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Work Done</span>
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Total Consumption (Work Done)</span>
                 <TrendingUp className="h-4 w-4 text-emerald-600" />
               </div>
-              <p className="text-2xl font-black text-emerald-700">
-                {yieldSummary
-                  ? Number(yieldSummary.total_printed).toLocaleString()
-                  : batches
-                      .filter((b) => b.status === "Reconciled")
-                      .reduce((s, b) => s + (Number(b.printed_cards) || 0), 0)
-                      .toLocaleString()}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Printed / produced</p>
-            </CardContent>
-          </Card>
-
-          {/* Average Yield */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Avg Yield Rate</span>
-                <BarChart3 className="h-4 w-4 text-dvla-gold" />
+              <div className="text-2xl font-semibold text-emerald-700">
+                {liveKpis.totalConsumption.toLocaleString()}
               </div>
-              <p className="text-2xl font-black text-slate-900">
-                {yieldSummary && yieldSummary.avg_yield ? `${yieldSummary.avg_yield}%` : "—"}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Spoilage: {yieldSummary ? `${yieldSummary.avg_waste}%` : "0%"}
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* Low Stock Alerts */}
-          <Card className="border-slate-200 bg-white shadow-xs">
-            <CardContent className="p-3.5">
-              <div className="flex items-center justify-between text-slate-500 mb-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">Low Stock</span>
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-              </div>
-              <p className={`text-2xl font-black ${lowStockItems.length > 0 ? "text-red-600" : "text-emerald-700"}`}>
-                {usageSummary ? usageSummary.low_stock + usageSummary.out_of_stock : lowStockItems.length}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {lowStockItems.length > 0 ? "Needs replenishment" : "Inventory healthy"}
+              <p className="text-xs text-slate-500 mt-2">
+                Avg {liveKpis.avgYieldPerIssuedUnit.toLocaleString()} output per unit issued
               </p>
             </CardContent>
           </Card>
         </div>
 
-        {/* Navigation Tabs (Hidden in Print) */}
-        <div className="flex border-b border-slate-200 gap-2 print:hidden">
-          <button
-            onClick={() => setActiveTab("work_done")}
-            className={`pb-3 px-4 text-sm font-bold border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === "work_done"
-                ? "border-dvla-green text-dvla-green"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            <CheckSquare className="h-4 w-4" />
-            Collected Consumables & Work Done ({filteredBatches.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("inventory")}
-            className={`pb-3 px-4 text-sm font-bold border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === "inventory"
-                ? "border-dvla-green text-dvla-green"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            <Layers className="h-4 w-4" />
-            Stock & Inventory Balances ({filteredUsage.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("low_stock")}
-            className={`pb-3 px-4 text-sm font-bold border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === "low_stock"
-                ? "border-red-600 text-red-600"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            Low Stock Alerts ({lowStockItems.length})
-          </button>
-        </div>
-
-        {/* COMPREHENSIVE FILTERS BAR WITH ADVANCED DATE RANGE FILTERING (Hidden in Print) */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-4 print:hidden">
-          {/* Row 1: Search, Station, Category, and Work Status */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-12 gap-3 items-end">
-            {/* Search */}
-            <div className="lg:col-span-4 space-y-1">
-              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Search Records</Label>
+        {/* ── STREAMLINED FILTER BAR ──────────────────────────────────────── */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200/80 space-y-4 print:hidden">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+            <div className="lg:col-span-4 space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Search</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
-                  placeholder="Search item code, description, officer, batch..."
-                  className="pl-9 bg-slate-50 border-slate-200 focus:bg-white text-xs h-9"
+                  placeholder="Officer name, consumable type, or ref..."
+                  className="pl-9 bg-slate-50/70 border-slate-200 text-xs h-9 font-normal"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
             </div>
 
-            {/* Station Filter */}
-            <div className="lg:col-span-3 space-y-1">
-              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Station</Label>
-              <Select value={selectedStation} onValueChange={setSelectedStation}>
-                <SelectTrigger className="bg-slate-50 text-xs h-9">
-                  <SelectValue placeholder="All Stations" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Stations</SelectItem>
-                  {stations.map((s) => (
-                    <SelectItem key={s.id} value={s.name}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Category Filter */}
-            <div className="lg:col-span-3 space-y-1">
-              <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Category / Type</Label>
+            <div className="lg:col-span-3 space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Consumable Type</Label>
               <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-                <SelectTrigger className="bg-slate-50 text-xs h-9">
-                  <SelectValue placeholder="All Categories" />
+                <SelectTrigger className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal">
+                  <SelectValue placeholder="All Consumable Types" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Categories</SelectItem>
+                  <SelectItem value="all">All Consumable Types</SelectItem>
                   {categories.map((c) => (
                     <SelectItem key={c.id} value={c.name}>
                       {c.name}
@@ -795,45 +749,52 @@ export default function ReportsPage() {
               </Select>
             </div>
 
-            {/* Status Filter (Work Done tab) or Reset */}
-            {activeTab === "work_done" ? (
-              <div className="lg:col-span-2 space-y-1">
-                <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-600">Reconciled Status</Label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="bg-slate-50 text-xs h-9">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="Pending">Pending Reconciliation</SelectItem>
-                    <SelectItem value="Reconciled">Reconciled</SelectItem>
-                  </SelectContent>
-                </Select>
+            <div className="lg:col-span-2 space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Workflow Stage</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal">
+                  <SelectValue placeholder="All Stages" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Stages</SelectItem>
+                  <SelectItem value="Pending Issue">Pending Issue</SelectItem>
+                  <SelectItem value="Issued">Issued</SelectItem>
+                  <SelectItem value="Completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="lg:col-span-3 flex items-center gap-2">
+              <div className="flex-1 space-y-1.5">
+                <Label className="text-xs font-normal text-slate-500">From</Label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => {
+                    setActivePreset("custom");
+                    setDateFrom(e.target.value);
+                  }}
+                  className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal"
+                />
               </div>
-            ) : (
-              <div className="lg:col-span-2 flex items-end">
-                {hasActiveFilters && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleResetFilters}
-                    className="h-9 w-full text-xs text-slate-600 hover:text-slate-900 border border-slate-200"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                    Reset Filters
-                  </Button>
-                )}
+              <div className="flex-1 space-y-1.5">
+                <Label className="text-xs font-normal text-slate-500">To</Label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => {
+                    setActivePreset("custom");
+                    setDateTo(e.target.value);
+                  }}
+                  className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal"
+                />
               </div>
-            )}
+            </div>
           </div>
 
-          {/* Row 2: Date Range Filter Section */}
-          <div className="pt-3 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            {/* Quick Date Presets */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-semibold text-slate-500 mr-1 flex items-center gap-1">
-                <Calendar className="h-3.5 w-3.5 text-dvla-green" /> Date Period:
-              </span>
+              <span className="text-xs text-slate-400 mr-1">Quick Period:</span>
               {(
                 [
                   { id: "all", label: "All Time" },
@@ -848,12 +809,10 @@ export default function ReportsPage() {
                   key={preset.id}
                   onClick={() => handleApplyPreset(preset.id)}
                   type="button"
-                  className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all ${
-                    activePreset === preset.id && !dateFrom && !dateTo && preset.id === "all"
-                      ? "bg-dvla-green text-white shadow-xs"
-                      : activePreset === preset.id && preset.id !== "all"
-                      ? "bg-dvla-green text-white shadow-xs"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    activePreset === preset.id
+                      ? "bg-dvla-green text-white font-medium"
+                      : "text-slate-600 hover:bg-slate-100 font-normal"
                   }`}
                 >
                   {preset.label}
@@ -861,479 +820,691 @@ export default function ReportsPage() {
               ))}
             </div>
 
-            {/* Custom Date Range Pickers (Start Date & End Date) */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5">
-                <Label htmlFor="dateFrom" className="text-xs text-slate-500 font-medium">From:</Label>
-                <Input
-                  id="dateFrom"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => handleCustomDateChange(e.target.value, dateTo)}
-                  className="bg-slate-50 text-xs h-8.5 w-36"
-                  title="Filter start date"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <Label htmlFor="dateTo" className="text-xs text-slate-500 font-medium">To:</Label>
-                <Input
-                  id="dateTo"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => handleCustomDateChange(dateFrom, e.target.value)}
-                  className="bg-slate-50 text-xs h-8.5 w-36"
-                  title="Filter end date"
-                />
-              </div>
-
-              {hasActiveFilters && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleResetFilters}
-                  className="h-8.5 px-2.5 text-xs text-slate-600 hover:text-slate-900 border-slate-300"
-                  title="Reset all filters"
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  Reset
-                </Button>
-              )}
-            </div>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset filters
+              </button>
+            )}
           </div>
-
-          {/* Active Filter Summary Strip */}
-          {(dateFrom || dateTo || selectedStation !== "all" || selectedCategory !== "all") && (
-            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
-              <span className="font-semibold text-slate-700">Active Scope:</span>
-              {dateFrom || dateTo ? (
-                <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 font-mono text-[10px]">
-                  Period: {dateFrom || "Earliest"} → {dateTo || "Latest"}
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px]">
-                  Period: All Dates
-                </Badge>
-              )}
-              {selectedStation !== "all" && (
-                <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200 text-[10px]">
-                  Station: {selectedStation}
-                </Badge>
-              )}
-              {selectedCategory !== "all" && (
-                <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
-                  Category: {selectedCategory}
-                </Badge>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* TAB 1: Collected Consumables & Work Done Table (NO ACTION COLUMN) */}
-        {activeTab === "work_done" && (
-          <Card className="shadow-xs border-slate-200">
-            <CardHeader className="bg-slate-50/80 border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
+        {/* ── CLEAN 2-COLUMN DYNAMIC GRAPHS ───────────────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 print:hidden">
+          {/* LEFT GRAPH: Monthly Trend */}
+          <Card className="lg:col-span-7 border-slate-200/80 bg-white shadow-none py-0">
+            <CardHeader className="p-6 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-dvla-green" />
-                  Consumable Collections & Returned Work Done Report
+                <CardTitle className="text-base font-medium text-slate-900 flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4 text-dvla-green" />
+                  Monthly Activity Trend
                 </CardTitle>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Production report showing collected batches, work completed (cards printed), damaged spoilage, and net yield rates.
-                </p>
+                <CardDescription className="text-xs text-slate-500 mt-0.5">
+                  {hoveredMonthIdx !== null && timelineSeries[hoveredMonthIdx]
+                    ? `${timelineSeries[hoveredMonthIdx].label}: ${timelineSeries[hoveredMonthIdx].requestedQty} requested, ${timelineSeries[hoveredMonthIdx].issuedQty} issued, ${timelineSeries[hoveredMonthIdx].consumption.toLocaleString()} consumption`
+                    : "Hover over any bar to inspect monthly figures"}
+                </CardDescription>
               </div>
-              <span className="text-xs font-semibold text-slate-500">
-                Showing {filteredBatches.length} of {batches.length} batches
-              </span>
+
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setTrendMode("consumption")}
+                  className={`px-3 py-1 rounded-md text-xs transition-all ${
+                    trendMode === "consumption"
+                      ? "bg-white text-slate-900 shadow-xs font-medium"
+                      : "text-slate-600 hover:text-slate-900 font-normal"
+                  }`}
+                >
+                  Consumption
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrendMode("quantities")}
+                  className={`px-3 py-1 rounded-md text-xs transition-all ${
+                    trendMode === "quantities"
+                      ? "bg-white text-slate-900 shadow-xs font-medium"
+                      : "text-slate-600 hover:text-slate-900 font-normal"
+                  }`}
+                >
+                  Requested vs. Issued
+                </button>
+              </div>
             </CardHeader>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
-                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
-                      <TableHead className="font-bold text-slate-700">Date Issued</TableHead>
-                      <TableHead className="font-bold text-slate-700">Batch Code</TableHead>
-                      <TableHead className="font-bold text-slate-700">Consumable Item</TableHead>
-                      <TableHead className="font-bold text-slate-700">Category</TableHead>
-                      <TableHead className="font-bold text-slate-700">Station / Dept</TableHead>
-                      <TableHead className="font-bold text-slate-700">Collected By</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Qty Collected</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Work Done (Printed)</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Damaged</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Recaptured</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Yield %</TableHead>
-                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading ? (
-                      <TableRow>
-                        <TableCell colSpan={13} className="text-center py-10 text-slate-500">
-                          <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-2" />
-                          Loading work reconciliation report data...
-                        </TableCell>
-                      </TableRow>
-                    ) : filteredBatches.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={13} className="text-center py-10 text-slate-500">
-                          No collected consumable records match your selected date range or filters.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredBatches.map((b, idx) => (
-                        <TableRow key={b.id} className="hover:bg-slate-50/70 border-b border-slate-100 transition-colors">
-                          <TableCell className="text-center font-mono text-xs text-slate-400">
-                            {idx + 1}
-                          </TableCell>
-                          <TableCell className="text-xs text-slate-600 whitespace-nowrap">
-                            {b.date_issued}
-                          </TableCell>
-                          <TableCell>
-                            <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                              {b.batch_code}
+
+            <CardContent className="px-6 pb-6 pt-2">
+              {timelineSeries.length === 0 ? (
+                <div className="h-56 flex items-center justify-center text-xs text-slate-400">
+                  No timeline data available for the selected filters.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="relative h-52 pt-6 pb-2 border-b border-slate-100 flex items-end gap-3 sm:gap-5 justify-around">
+                    {/* Subtle horizontal guide lines */}
+                    <div className="absolute inset-x-0 top-6 bottom-2 flex flex-col justify-between pointer-events-none">
+                      {[1, 0.5, 0].map((tick) => (
+                        <div
+                          key={tick}
+                          className="border-b border-dashed border-slate-100 w-full"
+                        />
+                      ))}
+                    </div>
+
+                    {timelineSeries.map((item, idx) => {
+                      const consHeightPct = Math.max(
+                        4,
+                        Math.round((item.consumption / maxTrendConsumption) * 100)
+                      );
+                      const reqHeightPct = Math.max(
+                        4,
+                        Math.round((item.requestedQty / maxTrendQty) * 100)
+                      );
+                      const issHeightPct = Math.max(
+                        4,
+                        Math.round((item.issuedQty / maxTrendQty) * 100)
+                      );
+
+                      return (
+                        <div
+                          key={item.key}
+                          onMouseEnter={() => setHoveredMonthIdx(idx)}
+                          onMouseLeave={() => setHoveredMonthIdx(null)}
+                          className="relative z-10 flex-1 flex flex-col items-center h-full justify-end group"
+                        >
+                          <div className="mb-1.5 text-[11px] text-slate-500 font-normal">
+                            {trendMode === "consumption"
+                              ? item.consumption > 999
+                                ? `${(item.consumption / 1000).toFixed(1)}k`
+                                : item.consumption
+                              : `${item.requestedQty}/${item.issuedQty}`}
+                          </div>
+
+                          <div className="w-full max-w-[44px] flex items-end justify-center gap-1 h-[145px]">
+                            {trendMode === "consumption" ? (
+                              <div
+                                className="w-full rounded-t-md bg-dvla-green/85 group-hover:bg-dvla-green transition-all duration-300"
+                                style={{ height: `${consHeightPct}%` }}
+                              />
+                            ) : (
+                              <>
+                                <div
+                                  className="w-1/2 rounded-t-sm bg-amber-400 transition-all duration-300"
+                                  style={{ height: `${reqHeightPct}%` }}
+                                  title={`Requested: ${item.requestedQty}`}
+                                />
+                                <div
+                                  className="w-1/2 rounded-t-sm bg-blue-500 transition-all duration-300"
+                                  style={{ height: `${issHeightPct}%` }}
+                                  title={`Issued: ${item.issuedQty}`}
+                                />
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-around gap-2">
+                    {timelineSeries.map((item) => (
+                      <div
+                        key={item.key}
+                        className="flex-1 text-center text-xs text-slate-500 font-normal"
+                      >
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* RIGHT GRAPH: Switchable Breakdown (By Type / Share / Officers) */}
+          <Card className="lg:col-span-5 border-slate-200/80 bg-white shadow-none py-0">
+            <CardHeader className="p-6 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base font-medium text-slate-900 flex items-center gap-2">
+                  <PieChart className="h-4 w-4 text-dvla-green" />
+                  Consumption Breakdown
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-500 mt-0.5">
+                  Click any item below to filter the report
+                </CardDescription>
+              </div>
+
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg self-start sm:self-auto">
+                {(
+                  [
+                    { id: "types", label: "By Type" },
+                    { id: "distribution", label: "Share" },
+                    { id: "officers", label: "Officers" },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setRightChartMode(tab.id)}
+                    className={`px-2.5 py-1 rounded-md text-xs transition-all ${
+                      rightChartMode === tab.id
+                        ? "bg-white text-slate-900 shadow-xs font-medium"
+                        : "text-slate-600 hover:text-slate-900 font-normal"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </CardHeader>
+
+            <CardContent className="px-6 pb-6 pt-2">
+              {rightChartMode === "types" && (
+                <div className="space-y-4">
+                  {dynamicTypeStats.map((t) => {
+                    const barWidth = Math.round((t.consumption / maxTypeConsumption) * 100);
+                    const isSelected =
+                      selectedCategory.toLowerCase() === t.name.toLowerCase();
+
+                    return (
+                      <div
+                        key={t.name}
+                        onClick={() =>
+                          setSelectedCategory((prev) =>
+                            prev.toLowerCase() === t.name.toLowerCase() ? "all" : t.name
+                          )
+                        }
+                        className={`p-3 rounded-lg border transition-colors cursor-pointer ${
+                          isSelected
+                            ? "border-dvla-green bg-emerald-50/30"
+                            : "border-slate-100 hover:bg-slate-50/70"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-xs mb-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: t.hex }}
+                            />
+                            <span className="font-medium text-slate-800">{t.name}</span>
+                          </div>
+                          <span className="text-slate-500">
+                            Req: {t.requestedQty} • Issued: {t.issuedQty} •{" "}
+                            <span className="text-emerald-700 font-medium">
+                              {t.consumption.toLocaleString()}
                             </span>
-                            {b.issue_reference && (
-                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">{b.issue_reference}</div>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-semibold text-slate-900 text-sm">{b.item_name}</div>
-                            <div className="text-[11px] font-mono text-slate-500">{b.item_code}</div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="bg-slate-50 font-medium text-[11px] text-slate-600">
-                              {b.category_name || "—"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs text-slate-700">
-                            <div className="font-medium">{b.station_name || "Head Office"}</div>
-                            {b.department_name && <div className="text-slate-400 text-[11px]">{b.department_name}</div>}
-                          </TableCell>
-                          <TableCell className="text-sm font-medium text-slate-800">
-                            {b.issued_to}
-                          </TableCell>
-                          <TableCell className="text-right font-extrabold text-slate-900 text-sm whitespace-nowrap">
-                            {(Number(b.quantity_issued) || 0).toLocaleString()}{" "}
-                            <span className="text-xs font-normal text-slate-400">{b.unit}</span>
-                          </TableCell>
-                          <TableCell className="text-right font-bold text-emerald-700 text-sm whitespace-nowrap">
-                            {b.status === "Reconciled" ? (
-                              `${(Number(b.printed_cards) || 0).toLocaleString()} ${b.unit}`
-                            ) : (
-                              <span className="text-slate-400 font-normal italic">Pending</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-sm whitespace-nowrap">
-                            {b.status === "Reconciled" ? (
-                              <span className={(Number(b.damaged_cards) || 0) > 0 ? "font-bold text-red-600" : "text-slate-400"}>
-                                {(Number(b.damaged_cards) || 0).toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 font-normal">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-slate-600 whitespace-nowrap">
-                            {b.status === "Reconciled" ? (
-                              (Number(b.recapture_cards) || 0).toLocaleString()
-                            ) : (
-                              <span className="text-slate-400 font-normal">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-sm font-bold">
-                            {b.status === "Reconciled" && b.yield_percentage !== null ? (
-                              <span
-                                className={
-                                  b.yield_percentage >= 95
-                                    ? "text-emerald-700 font-bold"
-                                    : b.yield_percentage >= 85
-                                    ? "text-amber-600 font-bold"
-                                    : "text-red-600 font-bold"
-                                }
-                              >
-                                {b.yield_percentage}%
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 font-normal">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Badge
-                              variant="outline"
-                              className={
-                                b.status === "Reconciled"
-                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200 font-semibold"
-                                  : "bg-amber-50 text-amber-800 border-amber-200 font-semibold flex items-center gap-1 mx-auto w-fit"
-                              }
-                            >
-                              {b.status === "Pending" ? <Clock className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
-                              {b.status}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                  {/* Table Summary Footer */}
-                  {filteredBatches.length > 0 && (
-                    <TableFooter className="bg-slate-100/80 border-t-2 border-slate-300 font-bold">
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-slate-800 text-xs uppercase tracking-wider font-extrabold">
-                          Total Period Summary ({filteredBatches.length} batches)
-                        </TableCell>
-                        <TableCell className="text-right font-black text-slate-900 text-sm">
-                          {tab1Totals.totalCollected.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-emerald-800 text-sm">
-                          {tab1Totals.totalPrinted.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-red-600 text-sm">
-                          {tab1Totals.totalDamaged.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-slate-700 text-sm">
-                          {tab1Totals.totalRecapture.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-dvla-green text-sm">
-                          {tab1Totals.netYield !== "—" ? `${tab1Totals.netYield}%` : "—"}
-                        </TableCell>
-                        <TableCell className="text-center text-xs text-slate-500 font-normal">
-                          {filteredBatches.filter((b) => b.status === "Reconciled").length} Reconciled
-                        </TableCell>
-                      </TableRow>
-                    </TableFooter>
-                  )}
-                </Table>
-              </div>
+                          </span>
+                        </div>
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{
+                              width: `${Math.max(barWidth, t.consumption > 0 ? 4 : 0)}%`,
+                              backgroundColor: t.hex,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {rightChartMode === "distribution" && (
+                <div className="flex flex-col sm:flex-row items-center gap-6 py-2">
+                  <div className="relative h-40 w-40 shrink-0 flex items-center justify-center">
+                    <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r="46"
+                        fill="transparent"
+                        stroke="#f1f5f9"
+                        strokeWidth="14"
+                      />
+                      {(() => {
+                        const circumference = 2 * Math.PI * 46;
+                        let cumulativePct = 0;
+                        return dynamicTypeStats
+                          .filter((i) => i.consumption > 0)
+                          .map((item) => {
+                            const strokeDasharray = `${
+                              (item.consumptionShare / 100) * circumference
+                            } ${circumference}`;
+                            const strokeDashoffset = -(cumulativePct / 100) * circumference;
+                            cumulativePct += item.consumptionShare;
+                            return (
+                              <circle
+                                key={item.name}
+                                cx="60"
+                                cy="60"
+                                r="46"
+                                fill="transparent"
+                                stroke={item.hex}
+                                strokeWidth="14"
+                                strokeDasharray={strokeDasharray}
+                                strokeDashoffset={strokeDashoffset}
+                                className="transition-all duration-500"
+                              />
+                            );
+                          });
+                      })()}
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                      <span className="text-[11px] text-slate-400">Total Output</span>
+                      <span className="text-sm font-semibold text-slate-800">
+                        {liveKpis.totalConsumption.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 w-full space-y-2.5">
+                    {dynamicTypeStats.map((t) => (
+                      <div
+                        key={t.name}
+                        onClick={() =>
+                          setSelectedCategory((prev) =>
+                            prev.toLowerCase() === t.name.toLowerCase() ? "all" : t.name
+                          )
+                        }
+                        className="flex items-center justify-between text-xs py-1 px-2 rounded hover:bg-slate-50 cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: t.hex }}
+                          />
+                          <span className="text-slate-700">{t.name}</span>
+                        </div>
+                        <span className="text-slate-500">
+                          {t.consumption.toLocaleString()} ({t.consumptionShare}%)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {rightChartMode === "officers" && (
+                <div className="space-y-3.5">
+                  {personnelStats.slice(0, 5).map((officer) => {
+                    const barPct = Math.max(
+                      4,
+                      Math.round((officer.consumption / maxOfficerConsumption) * 100)
+                    );
+                    return (
+                      <div
+                        key={officer.name}
+                        onClick={() =>
+                          setSearchTerm((prev) =>
+                            prev.trim().toUpperCase() === officer.name ? "" : officer.name
+                          )
+                        }
+                        className="p-2.5 rounded-lg border border-slate-100 hover:bg-slate-50/70 cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between text-xs mb-1.5">
+                          <span className="font-medium text-slate-800">{officer.name}</span>
+                          <span className="text-slate-500">
+                            {officer.batches} requests •{" "}
+                            <span className="text-emerald-700 font-medium">
+                              {officer.consumption.toLocaleString()}
+                            </span>
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-dvla-green/80 rounded-full transition-all duration-500"
+                            style={{ width: `${barPct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
-        )}
+        </div>
 
-        {/* TAB 2: Stock & Inventory Balances Table */}
-        {activeTab === "inventory" && (
-          <Card className="shadow-xs border-slate-200">
-            <CardHeader className="bg-slate-50/80 border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-base font-semibold text-slate-800 flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-dvla-green" />
-                  Consumable Stock Usage & Balances Report
-                </CardTitle>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Consolidated inventory register displaying intake receipts, issues for the period, and current balance on hand.
-                </p>
-              </div>
-              <span className="text-xs font-semibold text-slate-500">
-                Showing {filteredUsage.length} of {usageItems.length} consumables
-              </span>
-            </CardHeader>
-            <CardContent className="p-0">
+        {/* ── TABLE TABS & DATA VIEWS ─────────────────────────────────────── */}
+        <div className="space-y-4">
+          <div className="flex flex-wrap border-b border-slate-200 gap-4 print:hidden">
+            <button
+              onClick={() => setActiveTab("return_sheet")}
+              className={`pb-3 px-2 text-sm border-b-2 flex items-center gap-2 transition-colors ${
+                activeTab === "return_sheet"
+                  ? "border-dvla-green text-dvla-green font-medium"
+                  : "border-transparent text-slate-500 hover:text-slate-800 font-normal"
+              }`}
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Consumables Return Sheet ({filteredRecords.length})
+            </button>
+
+            <button
+              onClick={() => setActiveTab("type_summary")}
+              className={`pb-3 px-2 text-sm border-b-2 flex items-center gap-2 transition-colors ${
+                activeTab === "type_summary"
+                  ? "border-dvla-green text-dvla-green font-medium"
+                  : "border-transparent text-slate-500 hover:text-slate-800 font-normal"
+              }`}
+            >
+              <Layers className="h-4 w-4" />
+              Summary by Consumable Type
+            </button>
+
+            <button
+              onClick={() => setActiveTab("personnel")}
+              className={`pb-3 px-2 text-sm border-b-2 flex items-center gap-2 transition-colors ${
+                activeTab === "personnel"
+                  ? "border-dvla-green text-dvla-green font-medium"
+                  : "border-transparent text-slate-500 hover:text-slate-800 font-normal"
+              }`}
+            >
+              <Users className="h-4 w-4" />
+              Officer Summary
+            </button>
+          </div>
+
+          {/* TAB 1: CONSUMABLES RETURN SHEET TABLE */}
+          {activeTab === "return_sheet" && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
-                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
-                      <TableHead className="font-bold text-slate-700">Code</TableHead>
-                      <TableHead className="font-bold text-slate-700">Item Name</TableHead>
-                      <TableHead className="font-bold text-slate-700">Category</TableHead>
-                      <TableHead className="font-bold text-slate-700">Station / Dept</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Received (Period)</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Issued (Period)</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Current Balance</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Reorder Threshold</TableHead>
-                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
+                      <th
+                        colSpan={7}
+                        className="py-2.5 px-4 text-center font-medium tracking-wide border-r border-slate-200"
+                      >
+                        CONSUMABLES REQUEST
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="py-2.5 px-4 text-center font-medium tracking-wide bg-emerald-50/70 text-emerald-900"
+                      >
+                        PRODUCTION RESULT
+                      </th>
+                    </tr>
+                    <tr className="bg-dvla-green text-white border-b border-slate-200">
+                      <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                        Date Requested
+                      </th>
+                      <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                        Consumable Type
+                      </th>
+                      <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                        Qty Requested
+                      </th>
+                      <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                        Qty Issued
+                      </th>
+                      <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                        Issued By
+                      </th>
+                      <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                        Requested By
+                      </th>
+                      <th className="py-3 px-4 text-left font-medium border-r border-slate-300 whitespace-nowrap">
+                        Received By
+                      </th>
+                      <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                        Date Returned
+                      </th>
+                      <th className="py-3 px-4 text-right font-medium whitespace-nowrap">
+                        Total Consumption
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
                     {loading ? (
-                      <TableRow>
-                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
-                          <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-2" />
-                          Loading inventory balances...
-                        </TableCell>
-                      </TableRow>
-                    ) : filteredUsage.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={10} className="text-center py-10 text-slate-500">
-                          No inventory records match your criteria.
-                        </TableCell>
-                      </TableRow>
+                      <tr>
+                        <td colSpan={9} className="text-center py-12 text-slate-400">
+                          <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-1.5" />
+                          Loading report...
+                        </td>
+                      </tr>
+                    ) : filteredRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center py-12 text-slate-400">
+                          No records match the selected filters.
+                        </td>
+                      </tr>
                     ) : (
-                      filteredUsage.map((item, idx) => (
-                        <TableRow key={item.id} className="hover:bg-slate-50/70 border-b border-slate-100 transition-colors">
-                          <TableCell className="text-center font-mono text-xs text-slate-400">
-                            {idx + 1}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs font-semibold text-slate-700">
-                            {item.item_code}
-                          </TableCell>
-                          <TableCell className="font-semibold text-slate-900">{item.name}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="bg-slate-50 font-medium text-[11px] text-slate-600">
-                              {item.category}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-slate-600 text-xs">
-                            <div>{item.station || "Head Office"}</div>
-                            {item.department && <div className="text-slate-400 text-[11px]">{item.department}</div>}
-                          </TableCell>
-                          <TableCell className="text-right font-medium text-slate-700">
-                            {(Number(item.received) || 0).toLocaleString()} <span className="text-[10px] text-slate-400">{item.unit}</span>
-                          </TableCell>
-                          <TableCell className="text-right font-medium text-slate-700">
-                            {(Number(item.issued) || 0).toLocaleString()} <span className="text-[10px] text-slate-400">{item.unit}</span>
-                          </TableCell>
-                          <TableCell className="text-right font-black text-slate-900 text-base">
-                            {(Number(item.balance) || 0).toLocaleString()}{" "}
-                            <span className="text-xs font-normal text-slate-500">{item.unit}</span>
-                          </TableCell>
-                          <TableCell className="text-right font-medium text-slate-500 text-sm">
-                            {(Number(item.reorder_level) || 0).toLocaleString()} {item.unit}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Badge
-                              variant="outline"
-                              className={
-                                item.status === "IN STOCK"
-                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                  : item.status === "LOW STOCK"
-                                  ? "bg-amber-50 text-amber-700 border-amber-200"
-                                  : "bg-red-50 text-red-700 border-red-200"
-                              }
-                            >
-                              {item.status}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                  {/* Table Summary Footer */}
-                  {filteredUsage.length > 0 && (
-                    <TableFooter className="bg-slate-100/80 border-t-2 border-slate-300 font-bold">
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-slate-800 text-xs uppercase tracking-wider font-extrabold">
-                          Total Period Stock Metrics ({filteredUsage.length} items)
-                        </TableCell>
-                        <TableCell className="text-right font-black text-slate-900 text-sm">
-                          {tab2Totals.totalReceived.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-slate-900 text-sm">
-                          {tab2Totals.totalIssued.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-emerald-800 text-base">
-                          {tab2Totals.totalBalance.toLocaleString()}
-                        </TableCell>
-                        <TableCell colSpan={2} className="text-center text-xs text-slate-500 font-normal">
-                          Inventory Healthy
-                        </TableCell>
-                      </TableRow>
-                    </TableFooter>
-                  )}
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                      filteredRecords.map((rec) => {
+                        const reqQ = Number(rec.quantity_requested ?? 0);
+                        const issQ =
+                          rec.quantity_issued !== null && rec.quantity_issued !== undefined
+                            ? Number(rec.quantity_issued)
+                            : null;
 
-        {/* TAB 3: Low Stock Alerts Table */}
-        {activeTab === "low_stock" && (
-          <Card className="shadow-xs border-slate-200">
-            <CardHeader className="bg-amber-50/60 border-b border-amber-200 pb-3 flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="text-base font-bold text-amber-900 flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-amber-600" />
-                  Critical & Low Stock Items Needing Reorder
-                </CardTitle>
-                <p className="text-xs text-amber-700 mt-0.5">
-                  Consumables currently below their configured safety reorder thresholds. Immediate procurement action recommended.
-                </p>
-              </div>
-              <span className="text-xs font-bold text-amber-800">
-                {lowStockItems.length} items flagged
-              </span>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/70 border-b border-slate-200">
-                      <TableHead className="w-10 font-bold text-slate-700 text-center">#</TableHead>
-                      <TableHead className="font-bold text-slate-700">Code & Item</TableHead>
-                      <TableHead className="font-bold text-slate-700">Category</TableHead>
-                      <TableHead className="font-bold text-slate-700">Location / Station</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Current Balance</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Reorder Threshold</TableHead>
-                      <TableHead className="text-right font-bold text-slate-700">Deficit / Shortfall</TableHead>
-                      <TableHead className="text-center font-bold text-slate-700">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lowStockItems.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={8} className="text-center py-10 text-slate-500">
-                          <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto mb-2" />
-                          All consumables are currently at healthy inventory levels! No low stock alerts.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      lowStockItems.map((item, idx) => {
-                        const deficit = (Number(item.reorder_level) || 0) - (Number(item.balance) || 0);
                         return (
-                          <TableRow key={item.id} className="hover:bg-slate-50 border-b border-slate-100">
-                            <TableCell className="text-center font-mono text-xs text-slate-400">
-                              {idx + 1}
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-semibold text-slate-900">{item.name}</div>
-                              <div className="text-[11px] font-mono text-slate-500">{item.item_code}</div>
-                            </TableCell>
-                            <TableCell className="text-xs text-slate-600">{item.category}</TableCell>
-                            <TableCell className="text-xs text-slate-600">{item.station || "Head Office"}</TableCell>
-                            <TableCell className="text-right font-extrabold text-red-600 text-base">
-                              {(Number(item.balance) || 0).toLocaleString()} {item.unit}
-                            </TableCell>
-                            <TableCell className="text-right font-medium text-slate-600">
-                              {(Number(item.reorder_level) || 0).toLocaleString()} {item.unit}
-                            </TableCell>
-                            <TableCell className="text-right font-bold text-amber-700">
-                              {deficit > 0 ? `-${deficit.toLocaleString()} ${item.unit}` : "0"}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="destructive" className="bg-red-600 text-white font-bold">
-                                {item.status}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
+                          <tr
+                            key={rec.id}
+                            className="bg-white hover:bg-slate-50/70 transition-colors"
+                          >
+                            <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                              {formatShortDate(rec.date_requested)}
+                            </td>
+                            <td className="py-3 px-4 text-slate-800 font-medium border-r border-slate-100 whitespace-nowrap">
+                              {rec.consumable_name}
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-700 border-r border-slate-100">
+                              {reqQ}
+                            </td>
+                            <td className="py-3 px-4 text-center text-blue-700 font-medium border-r border-slate-100">
+                              {issQ !== null ? issQ : "—"}
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                              {rec.issued_by || "—"}
+                            </td>
+                            <td className="py-3 px-4 text-slate-700 border-r border-slate-100 whitespace-nowrap">
+                              {rec.requested_by || "—"}
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 border-r border-slate-200 whitespace-nowrap">
+                              {rec.received_by || "—"}
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                              {formatShortDate(rec.date_returned) || "—"}
+                            </td>
+                            <td className="py-3 px-4 text-right text-emerald-700 font-medium whitespace-nowrap">
+                              {rec.total_consumption !== null &&
+                              rec.total_consumption !== undefined
+                                ? Number(rec.total_consumption).toLocaleString()
+                                : "—"}
+                            </td>
+                          </tr>
                         );
                       })
                     )}
-                  </TableBody>
-                  {/* Table Summary Footer */}
-                  {lowStockItems.length > 0 && (
-                    <TableFooter className="bg-red-50/80 border-t-2 border-red-200 font-bold">
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-red-900 text-xs uppercase tracking-wider font-extrabold">
-                          Total Procurement Reorder Deficit ({lowStockItems.length} items flagged)
-                        </TableCell>
-                        <TableCell className="text-right font-black text-red-700 text-base">
-                          {tab3Totals.totalBalance.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-slate-700 text-sm">
-                          {tab3Totals.totalReorder.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-black text-red-700 text-base">
-                          {tab3Totals.totalDeficit > 0 ? `-${tab3Totals.totalDeficit.toLocaleString()}` : "0"}
-                        </TableCell>
-                        <TableCell className="text-center text-xs text-red-600 font-semibold">
-                          Action Required
-                        </TableCell>
-                      </TableRow>
-                    </TableFooter>
+                  </tbody>
+                  {filteredRecords.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-slate-50 border-t border-slate-200 font-medium text-slate-800">
+                        <td className="py-3 px-4 border-r border-slate-200">Total</td>
+                        <td className="py-3 px-4 border-r border-slate-200 text-slate-500 font-normal">
+                          {filteredRecords.length} records
+                        </td>
+                        <td className="py-3 px-4 text-center border-r border-slate-200">
+                          {liveKpis.totalReqQty.toLocaleString()}
+                        </td>
+                        <td className="py-3 px-4 text-center border-r border-slate-200 text-blue-700">
+                          {liveKpis.totalIssQty.toLocaleString()}
+                        </td>
+                        <td colSpan={3} className="border-r border-slate-200" />
+                        <td className="py-3 px-4 text-center border-r border-slate-200 text-slate-500 font-normal">
+                          Total Consumption
+                        </td>
+                        <td className="py-3 px-4 text-right text-emerald-700">
+                          {liveKpis.totalConsumption.toLocaleString()}
+                        </td>
+                      </tr>
+                    </tfoot>
                   )}
-                </Table>
+                </table>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
+
+          {/* TAB 2: SUMMARY BY CONSUMABLE TYPE */}
+          {activeTab === "type_summary" && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/70">
+                    <TableHead className="font-medium text-slate-600">Consumable Type</TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Requests
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Qty Requested
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Qty Issued
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Pending Return
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Completed
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Avg Output / Unit
+                    </TableHead>
+                    <TableHead className="text-right font-medium text-slate-600">
+                      Total Consumption
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {dynamicTypeStats.map((t) => (
+                    <TableRow key={t.name} className="hover:bg-slate-50/60">
+                      <TableCell className="font-medium text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: t.hex }}
+                          />
+                          {t.name}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center text-slate-600">{t.requests}</TableCell>
+                      <TableCell className="text-center text-slate-700">
+                        {t.requestedQty.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-center text-blue-700">
+                        {t.issuedQty.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-center text-amber-600">
+                        {t.issuedPending}
+                      </TableCell>
+                      <TableCell className="text-center text-emerald-700">
+                        {t.completed}
+                      </TableCell>
+                      <TableCell className="text-center text-slate-600">
+                        {t.avgYield.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-medium text-emerald-700">
+                        {t.consumption.toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-slate-50 font-medium text-slate-800">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-center">{liveKpis.totalRequests}</TableCell>
+                    <TableCell className="text-center">
+                      {liveKpis.totalReqQty.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-center text-blue-700">
+                      {liveKpis.totalIssQty.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-center text-amber-600">
+                      {liveKpis.issuedPendingReturnCount}
+                    </TableCell>
+                    <TableCell className="text-center text-emerald-700">
+                      {liveKpis.completedCount}
+                    </TableCell>
+                    <TableCell className="text-center text-slate-600">
+                      {liveKpis.avgYieldPerIssuedUnit.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right text-emerald-700">
+                      {liveKpis.totalConsumption.toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </div>
+          )}
+
+          {/* TAB 3: OFFICER SUMMARY */}
+          {activeTab === "personnel" && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-50/70">
+                    <TableHead className="font-medium text-slate-600">Officer Name</TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Requests
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Completed Returns
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Qty Requested
+                    </TableHead>
+                    <TableHead className="text-center font-medium text-slate-600">
+                      Qty Issued
+                    </TableHead>
+                    <TableHead className="font-medium text-slate-600">
+                      Consumable Types
+                    </TableHead>
+                    <TableHead className="text-right font-medium text-slate-600">
+                      Total Consumption
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {personnelStats.map((p) => (
+                    <TableRow key={p.name} className="hover:bg-slate-50/60">
+                      <TableCell className="font-medium text-slate-800">{p.name}</TableCell>
+                      <TableCell className="text-center text-slate-600">{p.batches}</TableCell>
+                      <TableCell className="text-center text-emerald-700">
+                        {p.completedBatches}
+                      </TableCell>
+                      <TableCell className="text-center text-slate-700">
+                        {p.requestedQty.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-center text-blue-700">
+                        {p.issuedQty.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-600">
+                        <div className="flex flex-wrap gap-1.5">
+                          {p.typesList.map((t) => (
+                            <Badge
+                              key={t}
+                              variant="outline"
+                              className="font-normal text-[11px] bg-slate-50 border-slate-200 text-slate-600"
+                            >
+                              {t}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-medium text-emerald-700">
+                        {p.consumption.toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
       </div>
     </DashboardLayout>
   );

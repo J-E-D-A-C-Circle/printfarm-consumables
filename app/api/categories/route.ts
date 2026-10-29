@@ -16,17 +16,35 @@ export async function GET(req: NextRequest) {
        cat.code_prefix, 
        cat.purpose, 
        cat.is_active,
-       COALESCE(c.item_count, 0) AS item_count
+       COALESCE(r.request_count, 0) AS item_count,
+       COALESCE(r.request_count, 0) AS request_count,
+       COALESCE(r.total_requested, 0) AS total_requested,
+       COALESCE(r.total_issued, 0) AS total_issued,
+       COALESCE(r.total_consumption, 0) AS total_consumption
      FROM categories cat
      LEFT JOIN (
-       SELECT category_id, COUNT(*) AS item_count 
-       FROM consumables 
-       WHERE is_active = 1 
-       GROUP BY category_id
-     ) c ON c.category_id = cat.id
+       SELECT 
+         consumable_name,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(quantity_requested), 0) AS total_requested,
+         COALESCE(SUM(COALESCE(quantity_issued, 0)), 0) AS total_issued,
+         COALESCE(SUM(COALESCE(total_consumption, 0)), 0) AS total_consumption
+       FROM consumable_requests
+       GROUP BY consumable_name
+     ) r ON LOWER(r.consumable_name) = LOWER(cat.name)
      WHERE cat.is_active = 1 
-     ORDER BY cat.name`
+     ORDER BY
+       CASE LOWER(cat.name)
+         WHEN 'holo patch' THEN 1
+         WHEN 'color ribbon' THEN 2
+         WHEN 'mcc660 holo patch' THEN 3
+         WHEN 'mcc660 clear' THEN 4
+         WHEN 'black' THEN 5
+         ELSE 6
+       END,
+       cat.name ASC`
   );
+
   return NextResponse.json(
     { data: rows },
     {
@@ -41,26 +59,40 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await getSessionFromRequest(req);
-  if (!session || !["Administrator", "Supervisor", "Store Officer"].includes(session.role)) {
+  if (!session || !["Administrator", "Supervisor", "Store Officer", "Station Officer"].includes(session.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const { name, code_prefix, purpose } = await req.json();
-  if (!name) return NextResponse.json({ error: "Name required." }, { status: 400 });
+  if (!name || !name.trim()) {
+    return NextResponse.json({ error: "Consumable type name is required." }, { status: 400 });
+  }
 
-  // Check if active category already exists
-  const existing = await queryOne<{ id: number }>(
-    `SELECT id FROM categories WHERE name = ? AND is_active = 1`,
-    [name.trim()]
+  const trimmed = name.trim();
+  const prefix = code_prefix ? code_prefix.trim().toUpperCase() : trimmed.slice(0, 4).toUpperCase();
+
+  // Check if category already exists (active or inactive)
+  const existing = await queryOne<{ id: number; is_active: number }>(
+    `SELECT id, is_active FROM categories WHERE LOWER(name) = LOWER(?) LIMIT 1`,
+    [trimmed]
   );
+
   if (existing) {
-    return NextResponse.json({ error: `Category "${name.trim()}" already exists.` }, { status: 409 });
+    if (existing.is_active === 1) {
+      return NextResponse.json({ error: `Consumable type "${trimmed}" already exists.` }, { status: 409 });
+    }
+    // Reactivate soft-deleted category
+    await execute(
+      `UPDATE categories SET is_active = 1, name = ?, code_prefix = ?, purpose = ? WHERE id = ?`,
+      [trimmed, prefix, purpose || "printing", existing.id]
+    );
+    return NextResponse.json({ id: existing.id, name: trimmed }, { status: 201 });
   }
 
   const result = await execute(
-    `INSERT INTO categories (name, code_prefix, purpose) VALUES (?,?,?)`,
-    [name.trim(), code_prefix ? code_prefix.trim() : name.trim().slice(0, 3).toUpperCase(), purpose || "standard"]
+    `INSERT INTO categories (name, code_prefix, purpose, is_active) VALUES (?, ?, ?, 1)`,
+    [trimmed, prefix, purpose || "printing"]
   );
-  return NextResponse.json({ id: result.insertId, name: name.trim() }, { status: 201 });
+  return NextResponse.json({ id: result.insertId, name: trimmed }, { status: 201 });
 }
 
 export async function DELETE(req: NextRequest) {
@@ -69,13 +101,11 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Support both body payload and URL search parameters
   const url = new URL(req.url);
   const queryId = url.searchParams.get("id");
   const queryName = url.searchParams.get("name");
-  const queryForce = url.searchParams.get("force") === "true";
 
-  let body: { id?: number; name?: string; force?: boolean } = {};
+  let body: { id?: number; name?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -84,50 +114,24 @@ export async function DELETE(req: NextRequest) {
 
   const id = body.id || (queryId ? Number(queryId) : undefined);
   const name = body.name || queryName;
-  const force = Boolean(body.force || queryForce);
 
   if (!id && !name) {
-    return NextResponse.json({ error: "Category ID or name is required." }, { status: 400 });
+    return NextResponse.json({ error: "Consumable type ID or name is required." }, { status: 400 });
   }
 
-  // Find target category
   const targetCategory = await queryOne<{ id: number; name: string }>(
-    `SELECT id, name FROM categories WHERE (id = ? OR name = ?) AND is_active = 1`,
+    `SELECT id, name FROM categories WHERE (id = ? OR LOWER(name) = LOWER(?)) AND is_active = 1`,
     [id || 0, name || ""]
   );
 
   if (!targetCategory) {
-    return NextResponse.json({ success: true, message: "Category removed." });
+    return NextResponse.json({ success: true, message: "Consumable type removed." });
   }
 
-  // Check active items linked to this category
-  const activeItems = await query<{ id: number; name: string; item_code: string }>(
-    `SELECT id, name, item_code FROM consumables WHERE category_id = ? AND is_active = 1`,
-    [targetCategory.id]
-  );
-
-  if (activeItems.length > 0 && !force) {
-    const itemNames = activeItems.map((i) => `"${i.name}" (${i.item_code})`).join(", ");
-    return NextResponse.json({
-      error: `Cannot delete "${targetCategory.name}" — ${activeItems.length} active item(s) linked: ${itemNames}. Would you like to archive these items and proceed?`,
-      linkedCount: activeItems.length,
-      linkedItems: activeItems,
-    }, { status: 409 });
-  }
-
-  // If force is enabled, archive active consumables linked to this category
-  if (activeItems.length > 0 && force) {
-    await execute(`UPDATE consumables SET is_active = 0 WHERE category_id = ?`, [targetCategory.id]);
-  }
-
-  // Soft delete category
   await execute(`UPDATE categories SET is_active = 0 WHERE id = ?`, [targetCategory.id]);
-
-  // Note: We do not set category_id = NULL on consumables because category_id is NOT NULL in database schema.
-  // The category row still exists with is_active = 0, so existing foreign keys remain valid.
 
   return NextResponse.json({
     success: true,
-    message: `Category "${targetCategory.name}" deleted successfully.`
+    message: `Consumable type "${targetCategory.name}" removed successfully.`,
   });
 }

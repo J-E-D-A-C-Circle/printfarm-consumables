@@ -1,55 +1,74 @@
 "use client";
 
 import { DashboardLayout } from "@/components/DashboardLayout";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Search, Download, RefreshCw, Loader2, ArrowUpRight, FileSignature, Trash2, ChevronLeft, ChevronRight, PackageOpen, Plus, AlertCircle, CheckCircle2 } from "lucide-react";
-import Link from "next/link";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Search,
+  Download,
+  RefreshCw,
+  Loader2,
+  Plus,
+  Trash2,
+  PackageOpen,
+  AlertCircle,
+  CheckCircle2,
+  Send,
+  TrendingUp,
+  Edit3,
+  Package,
+  CheckSquare,
+  Clock,
+} from "lucide-react";
 import { IssueStockModal } from "@/components/IssueStockModal";
-import { ReconciliationModal } from "@/components/ReconciliationModal";
+import { ReconciliationModal, ReturnSheetRecord } from "@/components/ReconciliationModal";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState, useEffect, useCallback } from "react";
-import * as XLSX from "xlsx";
-
-interface StockIssueRecord {
-  id: number;
-  reference_number: string;
-  requisition_number: string | null;
-  consumable_id: number;
-  item_name: string;
-  item_code: string;
-  unit: string;
-  category: string;
-  quantity: number;
-  expected_quantity?: number;
-  to_station: string | null;
-  from_station: string | null;
-  department: string | null;
-  purpose: string;
-  receiving_officer: string | null;
-  date_issued: string;
-  balance_after: number | null;
-  remarks: string | null;
-  batch_id: number | null;
-}
+import { Suspense, useState, useEffect, useCallback, useMemo } from "react";
+import * as XLSX from "xlsx-js-style";
 
 interface Category {
   id: number;
   name: string;
   code_prefix?: string;
   item_count?: number;
+  total_requested?: number;
+  total_issued?: number;
+  total_consumption?: number;
+}
+
+interface SummaryMetrics {
+  total_requests: number;
+  pending_issue: number;
+  issued_pending_return: number;
+  completed: number;
+  total_requested_qty: number;
+  total_issued_qty: number;
+  total_consumption: number;
+}
+
+function formatShortDate(dateStr?: string | null) {
+  if (!dateStr) return "";
+  const clean = dateStr.slice(0, 10);
+  const parts = clean.split("-");
+  if (parts.length !== 3) return clean;
+  return `${parts[2]}/${parts[1]}/${parts[0].slice(2)}`;
 }
 
 function CategoriesContent() {
@@ -58,13 +77,22 @@ function CategoriesContent() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(categoryFilter || "all");
+  const [selectedStatus, setSelectedStatus] = useState("all");
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(15);
-  const [totalItems, setTotalItems] = useState(0);
+  const [pageSize] = useState(50);
 
-  const [issues, setIssues] = useState<StockIssueRecord[]>([]);
+  const [records, setRecords] = useState<ReturnSheetRecord[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [summary, setSummary] = useState<SummaryMetrics>({
+    total_requests: 0,
+    pending_issue: 0,
+    issued_pending_return: 0,
+    completed: 0,
+    total_requested_qty: 0,
+    total_issued_qty: 0,
+    total_consumption: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -75,7 +103,6 @@ function CategoriesContent() {
   const [deletingCatId, setDeletingCatId] = useState<number | null>(null);
   const [typeMsg, setTypeMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Sync state if category param in URL changes
   useEffect(() => {
     if (categoryFilter) {
       setSelectedCategory(categoryFilter);
@@ -85,52 +112,68 @@ function CategoriesContent() {
     setCurrentPage(1);
   }, [categoryFilter]);
 
-  const loadIssuedRecords = useCallback(async () => {
+  const loadRecords = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (searchTerm) params.set("search", searchTerm);
       if (selectedCategory !== "all") params.set("category", selectedCategory);
+      if (selectedStatus !== "all") params.set("status", selectedStatus);
       params.set("page", String(currentPage));
       params.set("limit", String(pageSize));
 
       const [issuesRes, catsRes] = await Promise.all([
-        fetch(`/api/issues?${params.toString()}`),
-        fetch("/api/categories"),
+        fetch(`/api/issues?${params.toString()}`, { cache: "no-store" }),
+        fetch("/api/categories", { cache: "no-store" }),
       ]);
 
       if (issuesRes.ok) {
         const d = await issuesRes.json();
-        setIssues(d.data || []);
-        setTotalItems(d.total || 0);
+        setRecords(d.data || []);
+        if (d.summary) setSummary(d.summary);
       }
       if (catsRes.ok) {
         const d = await catsRes.json();
         setCategories(d.data || []);
       }
     } catch (err) {
-      console.error("Failed to load category dispatch issues:", err);
+      console.error("Failed to load return sheet records:", err);
     } finally {
       setLoading(false);
     }
-  }, [searchTerm, selectedCategory, currentPage, pageSize]);
+  }, [searchTerm, selectedCategory, selectedStatus, currentPage, pageSize]);
 
   useEffect(() => {
-    loadIssuedRecords();
-  }, [loadIssuedRecords]);
+    loadRecords();
+  }, [loadRecords]);
 
-  const handleDeleteDispatch = async (rec: StockIssueRecord) => {
-    if (!confirm(`Are you sure you want to delete dispatch reference "${rec.reference_number}"? This will restore ${rec.quantity} ${rec.unit}(s) back to inventory balance.`)) {
+  const tableTotals = useMemo(() => {
+    let totalReq = 0;
+    let totalIss = 0;
+    let totalCons = 0;
+
+    records.forEach((r) => {
+      totalReq += Number(r.quantity_requested ?? 0);
+      totalIss += Number(r.quantity_issued ?? 0);
+      totalCons += Number(r.total_consumption ?? 0);
+    });
+
+    return { totalReq, totalIss, totalCons };
+  }, [records]);
+
+  const handleDeleteRecord = async (rec: ReturnSheetRecord) => {
+    const name = rec.consumable_name || rec.category || "Consumable";
+    if (!confirm(`Delete record #${rec.reference_number} (${name} requested by ${rec.requested_by})?`)) {
       return;
     }
     setDeletingId(rec.id);
     try {
       const res = await fetch(`/api/issues?id=${rec.id}`, { method: "DELETE" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to delete dispatch record.");
-      await loadIssuedRecords();
+      if (!res.ok) throw new Error(data.error || "Failed to delete record.");
+      await loadRecords();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error deleting dispatch record.");
+      alert(err instanceof Error ? err.message : "Error deleting record.");
     } finally {
       setDeletingId(null);
     }
@@ -147,24 +190,27 @@ function CategoriesContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: trimmed,
-          code_prefix: trimmed.slice(0, 3).toUpperCase(),
-          purpose: "standard",
+          code_prefix: trimmed.slice(0, 4).toUpperCase(),
+          purpose: "printing",
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to add consumable type.");
-      setTypeMsg({ type: "success", text: `Consumable type "${trimmed}" created successfully!` });
+      setTypeMsg({ type: "success", text: `Consumable type "${trimmed}" added.` });
       setNewCatName("");
-      await loadIssuedRecords();
+      await loadRecords();
     } catch (err: unknown) {
-      setTypeMsg({ type: "error", text: err instanceof Error ? err.message : "Error creating category." });
+      setTypeMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Error adding consumable type.",
+      });
     } finally {
       setAddingCat(false);
     }
   };
 
   const handleDeleteCategory = async (cat: Category) => {
-    if (!confirm(`Are you sure you want to delete consumable type "${cat.name}"?`)) return;
+    if (!confirm(`Remove consumable type "${cat.name}"?`)) return;
     setTypeMsg(null);
     setDeletingCatId(cat.id);
     try {
@@ -174,355 +220,621 @@ function CategoriesContent() {
         body: JSON.stringify({ id: cat.id, name: cat.name }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 409) {
-          const proceed = confirm(
-            `${data.error}\n\nDo you want to archive all linked consumable items and delete consumable type "${cat.name}"?`
-          );
-          if (proceed) {
-            const forceRes = await fetch("/api/categories", {
-              method: "DELETE",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id: cat.id, name: cat.name, force: true }),
-            });
-            const forceData = await forceRes.json();
-            if (!forceRes.ok) throw new Error(forceData.error || `Cannot delete "${cat.name}".`);
-            setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" and linked items archived.` });
-            await loadIssuedRecords();
-            return;
-          }
-          return;
-        }
-        throw new Error(data.error || `Cannot delete "${cat.name}".`);
-      }
-      setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" deleted successfully.` });
-      await loadIssuedRecords();
+      if (!res.ok) throw new Error(data.error || `Cannot remove "${cat.name}".`);
+      setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" removed.` });
+      await loadRecords();
     } catch (err: unknown) {
-      setTypeMsg({ type: "error", text: err instanceof Error ? err.message : `Cannot delete "${cat.name}".` });
+      setTypeMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : `Cannot remove "${cat.name}".`,
+      });
     } finally {
       setDeletingCatId(null);
     }
   };
 
-  const handleExport = () => {
-    if (issues.length === 0) {
-      alert("No dispatch records available to export. All records have been deleted or none exist.");
+  const handleExportExcel = () => {
+    if (records.length === 0) {
+      alert("No records available to export.");
       return;
     }
 
-    const data = issues.map((rec, i) => ({
-
-      "No.": i + 1,
-      "Date Issued": rec.date_issued ? rec.date_issued.slice(0, 10) : "",
-      "Reference #": rec.reference_number,
-      "Item Code": rec.item_code,
-      "Consumable Item": rec.item_name,
-      Category: rec.category,
-      "Issued Qty": rec.quantity,
-      Unit: rec.unit,
-      "Target Station": rec.to_station || "Head Office",
-      Department: rec.department || "General Store",
-      "Receiving Officer": rec.receiving_officer || "—",
-      Purpose: rec.purpose,
-      "Balance After": rec.balance_after !== null ? rec.balance_after : "—",
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Category Dispatches");
-    XLSX.writeFile(wb, `DVLA_Category_Dispatch_Logs_${new Date().toISOString().split("T")[0]}.xlsx`);
+
+    const borderAll = {
+      top: { style: "thin", color: { rgb: "94A3B8" } },
+      bottom: { style: "thin", color: { rgb: "94A3B8" } },
+      left: { style: "thin", color: { rgb: "94A3B8" } },
+      right: { style: "thin", color: { rgb: "94A3B8" } },
+    };
+
+    const bannerStyle = {
+      font: { bold: true, sz: 11, color: { rgb: "0F172A" } },
+      fill: { fgColor: { rgb: "E2E8F0" }, patternType: "solid" },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: borderAll,
+    };
+
+    const colHeaderStyle = {
+      font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "1B5E20" }, patternType: "solid" },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: borderAll,
+    };
+
+    const cellStyle = {
+      font: { sz: 10, color: { rgb: "0F172A" } },
+      alignment: { vertical: "center", horizontal: "left" },
+      border: borderAll,
+    };
+
+    const numCellStyle = {
+      font: { sz: 10, bold: true, color: { rgb: "0F172A" } },
+      alignment: { vertical: "center", horizontal: "center" },
+      border: borderAll,
+    };
+
+    const totalRowStyle = {
+      font: { bold: true, sz: 10, color: { rgb: "1B5E20" } },
+      fill: { fgColor: { rgb: "E8F5E9" }, patternType: "solid" },
+      alignment: { vertical: "center", horizontal: "center" },
+      border: borderAll,
+    };
+
+    const row0 = [
+      "CONSUMABLES REQUEST",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "PRODUCTION RESULT",
+      "",
+    ];
+
+    const row1 = [
+      "DATE REQUESTED",
+      "CONSUMABLE TYPE",
+      "QUANTITY REQUESTED",
+      "QUANTITY ISSUED",
+      "ISSUED BY",
+      "REQUESTED BY",
+      "RECEIVED BY",
+      "DATE RETURNED",
+      "TOTAL CONSUMPTION",
+    ];
+
+    const dataRows = [...records]
+      .sort((a, b) => (a.date_requested || "").localeCompare(b.date_requested || ""))
+      .map((rec) => [
+        formatShortDate(rec.date_requested),
+        rec.consumable_name || rec.category || "",
+        Number(rec.quantity_requested ?? 0),
+        rec.quantity_issued !== null && rec.quantity_issued !== undefined
+          ? Number(rec.quantity_issued)
+          : "",
+        rec.issued_by || "",
+        rec.requested_by || "",
+        rec.received_by || "",
+        formatShortDate(rec.date_returned),
+        rec.total_consumption !== null && rec.total_consumption !== undefined
+          ? Number(rec.total_consumption)
+          : "",
+      ]);
+
+    const totalsRow = [
+      "TOTAL",
+      `${records.length} Records`,
+      tableTotals.totalReq,
+      tableTotals.totalIss,
+      "",
+      "",
+      "",
+      "",
+      tableTotals.totalCons,
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([row0, row1, ...dataRows, totalsRow]);
+
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } },
+    ];
+
+    for (let c = 0; c <= 8; c++) {
+      const a0 = XLSX.utils.encode_cell({ r: 0, c });
+      const a1 = XLSX.utils.encode_cell({ r: 1, c });
+      if (ws[a0]) ws[a0].s = bannerStyle;
+      if (ws[a1]) ws[a1].s = colHeaderStyle;
+    }
+
+    const centerCols = [0, 2, 3, 7, 8];
+    dataRows.forEach((rData, idx) => {
+      const rIdx = idx + 2;
+      rData.forEach((_, cIdx) => {
+        const addr = XLSX.utils.encode_cell({ r: rIdx, c: cIdx });
+        if (ws[addr]) {
+          ws[addr].s = centerCols.includes(cIdx) ? numCellStyle : cellStyle;
+        }
+      });
+    });
+
+    const totRowIndex = dataRows.length + 2;
+    totalsRow.forEach((_, cIdx) => {
+      const addr = XLSX.utils.encode_cell({ r: totRowIndex, c: cIdx });
+      if (ws[addr]) ws[addr].s = totalRowStyle;
+    });
+
+    ws["!cols"] = [
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 16 },
+      { wch: 20 },
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, "CONSUMABLES RETURN SHEET");
+    XLSX.writeFile(
+      wb,
+      `DVLA_Consumables_Return_Sheet_${new Date().toISOString().split("T")[0]}.xlsx`
+    );
   };
 
   return (
     <DashboardLayout>
-      <div className="space-y-4">
-        {/* Top Header & Actions */}
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+      <div className="space-y-8">
+        {/* Clean Page Header */}
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Category Dispatch Register</h1>
-            <p className="text-sm text-slate-500">
-              Audit log of all stock issued and dispatched across category lines.
+            <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
+              Consumables Return Sheet
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Request consumable quantities, issue exact, more, or less than requested, and record total consumption.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
             <Button
-              onClick={() => { setManageTypesOpen(true); setTypeMsg(null); }}
+              onClick={() => {
+                setManageTypesOpen(true);
+                setTypeMsg(null);
+              }}
               variant="outline"
               size="sm"
-              className="h-9 gap-1.5 border-slate-300 text-slate-700 hover:text-slate-900"
+              className="h-9 gap-2 border-slate-200 text-slate-600 font-normal"
             >
               <PackageOpen className="h-4 w-4 text-dvla-green" />
-              Manage Consumable Types
+              Consumable Types
             </Button>
-            <Button onClick={handleExport} variant="outline" size="sm" className="h-9 gap-1.5 border-slate-300 text-slate-700">
-              <Download className="h-4 w-4" />
-              Export Issued Logs
+            <Button
+              onClick={handleExportExcel}
+              variant="outline"
+              size="sm"
+              className="h-9 gap-2 border-slate-200 text-slate-600 font-normal"
+            >
+              <Download className="h-4 w-4 text-emerald-600" />
+              Export Excel (.xlsx)
             </Button>
             <IssueStockModal
               defaultCategory={selectedCategory !== "all" ? selectedCategory : undefined}
-              onSuccess={loadIssuedRecords}
+              onSuccess={loadRecords}
             >
-              <Button size="sm" className="h-9 gap-1.5 bg-dvla-gold hover:bg-dvla-gold-hover text-slate-900 font-semibold shadow-sm">
-                <ArrowUpRight className="h-4 w-4" />
-                Issue Stock
+              <Button
+                size="sm"
+                className="h-9 gap-2 bg-dvla-green hover:bg-dvla-green-light text-white font-medium"
+              >
+                <Plus className="h-4 w-4" />
+                New Request / Return Entry
               </Button>
             </IssueStockModal>
           </div>
         </div>
 
-        {/* Filters and Search */}
-        <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm gap-3">
-          <div className="flex items-center gap-3 w-full sm:w-auto flex-1">
-            <div className="relative w-full max-w-sm">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-              <Input
-                placeholder="Search by reference, item, officer..."
-                className="pl-9 bg-slate-50 border-slate-200 focus:bg-white text-sm"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
+        {/* Spacious 4-Card KPI Summary */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Quantity Requested</span>
+                <Package className="h-4 w-4 text-slate-400" />
+              </div>
+              <div className="text-2xl font-semibold text-slate-900">
+                {summary.total_requested_qty.toLocaleString()}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Across {summary.total_requests} request records
+              </p>
+            </CardContent>
+          </Card>
 
-            <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-              <SelectTrigger className="w-[200px] bg-slate-50 text-xs">
-                <SelectValue placeholder="All Categories" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                {categories.map((cat) => (
-                  <SelectItem key={cat.id} value={cat.name}>
-                    {cat.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Quantity Issued</span>
+                <CheckSquare className="h-4 w-4 text-blue-600" />
+              </div>
+              <div className="text-2xl font-semibold text-slate-900">
+                {summary.total_issued_qty.toLocaleString()}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                {summary.pending_issue} pending issue
+              </p>
+            </CardContent>
+          </Card>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={loadIssuedRecords}
-              title="Refresh dispatch table"
-              className="h-9 w-9 text-slate-600 hover:text-slate-900"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            </Button>
-            {(searchTerm || selectedCategory !== "all") && (
-              <Button
-                variant="ghost"
-                className="text-slate-500 hover:text-slate-900 text-xs"
-                onClick={() => {
-                  setSearchTerm("");
-                  setSelectedCategory("all");
-                }}
-              >
-                Clear Filters
-              </Button>
-            )}
-          </div>
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">In Production (Pending Return)</span>
+                <Clock className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="text-2xl font-semibold text-slate-900">
+                {summary.issued_pending_return}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Awaiting total consumption entry
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200/80 bg-white shadow-none py-0">
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between text-slate-500 mb-3">
+                <span className="text-xs font-medium">Total Consumption (Work Done)</span>
+                <TrendingUp className="h-4 w-4 text-emerald-600" />
+              </div>
+              <div className="text-2xl font-semibold text-emerald-700">
+                {summary.total_consumption.toLocaleString()}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                {summary.completed} completed returns
+              </p>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Data Table of ALL Issued Instances */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* Streamlined Filter & Search Bar */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200/80 flex flex-col sm:flex-row justify-between items-stretch sm:items-end gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Search</Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Input
+                  placeholder="Officer name, consumable, or ref..."
+                  className="pl-9 bg-slate-50/70 border-slate-200 text-xs h-9 font-normal"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Consumable Type</Label>
+              <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                <SelectTrigger className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal">
+                  <SelectValue placeholder="All Consumable Types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Consumable Types</SelectItem>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.id} value={cat.name}>
+                      {cat.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-normal text-slate-500">Workflow Stage</Label>
+              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+                <SelectTrigger className="bg-slate-50/70 border-slate-200 text-xs h-9 font-normal">
+                  <SelectValue placeholder="All Stages" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Stages</SelectItem>
+                  <SelectItem value="Pending Issue">Pending Issue</SelectItem>
+                  <SelectItem value="Issued">Issued (Pending Return)</SelectItem>
+                  <SelectItem value="Completed">Completed (Returned)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={loadRecords}
+            title="Refresh Return Sheet"
+            className="h-9 w-9 border-slate-200 text-slate-500 self-end"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
+
+        {/* CONSUMABLES RETURN SHEET TABLE (Single "CONSUMABLE TYPE" Column) */}
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50/80 border-b border-slate-200">
-                  <TableHead className="font-bold text-slate-700">Date Issued</TableHead>
-                  <TableHead className="font-bold text-slate-700">Reference #</TableHead>
-                  <TableHead className="font-bold text-slate-700">Consumable Item</TableHead>
-                  <TableHead className="font-bold text-slate-700">Category</TableHead>
-                  <TableHead className="font-bold text-slate-700">Target Station</TableHead>
-                  <TableHead className="font-bold text-slate-700">Department</TableHead>
-                  <TableHead className="font-bold text-slate-700">Receiving Officer</TableHead>
-                  <TableHead className="text-right font-bold text-slate-700">Issued Qty</TableHead>
-                  <TableHead className="text-right font-bold text-slate-700">Expected Cards</TableHead>
-                  <TableHead className="text-right font-bold text-slate-700">Balance After</TableHead>
-                  <TableHead className="text-center font-bold text-slate-700">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
+                  <th
+                    colSpan={7}
+                    className="py-2.5 px-4 text-center font-medium tracking-wide border-r border-slate-200"
+                  >
+                    CONSUMABLES REQUEST
+                  </th>
+                  <th
+                    colSpan={3}
+                    className="py-2.5 px-4 text-center font-medium tracking-wide bg-emerald-50/70 text-emerald-900"
+                  >
+                    PRODUCTION RESULT
+                  </th>
+                </tr>
+
+                <tr className="bg-dvla-green text-white border-b border-slate-200">
+                  <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                    Date Requested
+                  </th>
+                  <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                    Consumable Type
+                  </th>
+                  <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                    Qty Requested
+                  </th>
+                  <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                    Qty Issued
+                  </th>
+                  <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                    Issued By
+                  </th>
+                  <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
+                    Requested By
+                  </th>
+                  <th className="py-3 px-4 text-left font-medium border-r border-slate-300 whitespace-nowrap">
+                    Received By
+                  </th>
+                  <th className="py-3 px-4 text-center font-medium border-r border-white/10 whitespace-nowrap">
+                    Date Returned
+                  </th>
+                  <th className="py-3 px-4 text-right font-medium border-r border-white/10 whitespace-nowrap">
+                    Total Consumption
+                  </th>
+                  <th className="py-3 px-4 text-center font-medium whitespace-nowrap">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-slate-100">
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={11} className="text-center py-12 text-slate-500">
-                      <div className="flex justify-center items-center gap-2">
-                        <Loader2 className="h-5 w-5 animate-spin text-dvla-green" />
-                        <span>Loading category dispatch instances...</span>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : issues.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={11} className="text-center py-12 text-slate-500">
-                      No stock issue records found for the selected category filter.
-                    </TableCell>
-                  </TableRow>
+                  <tr>
+                    <td colSpan={10} className="text-center py-12 text-slate-400">
+                      <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-1.5" />
+                      Loading Consumables Return Sheet...
+                    </td>
+                  </tr>
+                ) : records.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="text-center py-12 text-slate-400">
+                      No consumable request or return records found. Click{" "}
+                      <span className="font-medium text-slate-600">New Request / Return Entry</span> to add one.
+                    </td>
+                  </tr>
                 ) : (
-                  issues.map((rec) => (
-                    <TableRow key={rec.id} className="hover:bg-slate-50/70 border-b border-slate-100 transition-colors">
-                      <TableCell className="text-xs text-slate-600 whitespace-nowrap">
-                        {rec.date_issued ? rec.date_issued.slice(0, 10) : "—"}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs font-semibold text-slate-800">
-                        {rec.reference_number}
-                      </TableCell>
-                      <TableCell>
-                        <Link href={`/consumables/${rec.consumable_id}`} className="hover:underline">
-                          <div className="font-semibold text-slate-900">{rec.item_name}</div>
-                          <div className="text-[11px] font-mono text-slate-500">{rec.item_code}</div>
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">
-                          {rec.category}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs text-slate-600">
-                        {rec.to_station || "Head Office"}
-                      </TableCell>
-                      <TableCell className="text-xs text-slate-600">
-                        {rec.department || "General Store"}
-                      </TableCell>
-                      <TableCell className="text-xs font-medium text-slate-800">
-                        {rec.receiving_officer || "—"}
-                      </TableCell>
-                      <TableCell className="text-right font-bold text-amber-600 text-sm">
-                        -{rec.quantity} <span className="text-[10px] text-slate-400 font-normal">{rec.unit}s</span>
-                      </TableCell>
-                      <TableCell className="text-right font-bold text-blue-700 text-sm">
-                        {rec.expected_quantity || rec.quantity} <span className="text-[10px] text-slate-400 font-normal">cards</span>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {rec.balance_after !== null ? (
-                          <span className="text-base font-extrabold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 inline-block shadow-xs">
-                            {rec.balance_after}
-                          </span>
-                        ) : (
-                          <span className="text-sm text-slate-400">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          {/* Reconciliation Action Icon Button */}
-                          <ReconciliationModal
-                            item={{ id: rec.consumable_id, name: rec.item_name, item_code: rec.item_code }}
-                            issueRecord={rec}
-                            onSuccess={loadIssuedRecords}
-                          >
+                  records.map((rec) => {
+                    const reqQty = Number(rec.quantity_requested ?? 0);
+                    const issQty =
+                      rec.quantity_issued !== null && rec.quantity_issued !== undefined
+                        ? Number(rec.quantity_issued)
+                        : null;
+                    const diff = issQty !== null ? issQty - reqQty : 0;
+
+                    return (
+                      <tr
+                        key={rec.id}
+                        className="bg-white hover:bg-slate-50/70 transition-colors"
+                      >
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {formatShortDate(rec.date_requested)}
+                        </td>
+
+                        <td className="py-3 px-4 text-slate-800 font-medium border-r border-slate-100 whitespace-nowrap">
+                          {rec.consumable_name || rec.category}
+                        </td>
+
+                        <td className="py-3 px-4 text-center text-slate-700 border-r border-slate-100 whitespace-nowrap">
+                          {reqQty}
+                        </td>
+
+                        <td className="py-3 px-4 text-center border-r border-slate-100 whitespace-nowrap">
+                          {issQty !== null ? (
+                            <div className="inline-flex items-center gap-1.5">
+                              <span className="font-medium text-blue-700">
+                                {issQty}
+                              </span>
+                              {diff !== 0 && (
+                                <span
+                                  title={`Requested: ${reqQty}, Issued: ${issQty}`}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                    diff < 0
+                                      ? "bg-amber-50 text-amber-700"
+                                      : "bg-blue-50 text-blue-700"
+                                  }`}
+                                >
+                                  {diff > 0 ? `+${diff}` : diff}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-normal"
+                            >
+                              Pending Issue
+                            </Badge>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {rec.issued_by || "—"}
+                        </td>
+
+                        <td className="py-3 px-4 text-slate-700 border-r border-slate-100 whitespace-nowrap">
+                          {rec.requested_by || "—"}
+                        </td>
+
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-200 whitespace-nowrap">
+                          {rec.received_by || "—"}
+                        </td>
+
+                        <td className="py-3 px-4 text-center text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {rec.date_returned ? (
+                            formatShortDate(rec.date_returned)
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4 text-right border-r border-slate-100 whitespace-nowrap">
+                          {rec.total_consumption !== null &&
+                          rec.total_consumption !== undefined ? (
+                            <span className="font-medium text-emerald-700">
+                              {Number(rec.total_consumption).toLocaleString()}
+                            </span>
+                          ) : rec.status === "Issued" ? (
+                            <span className="text-xs text-amber-600">
+                              Pending Return
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+
+                        <td className="py-2.5 px-4 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1">
+                            {rec.status === "Pending Issue" && (
+                              <ReconciliationModal
+                                issueRecord={rec}
+                                initialMode="issue"
+                                onSuccess={loadRecords}
+                              >
+                                <Button
+                                  size="sm"
+                                  className="h-7 px-2.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-normal gap-1"
+                                >
+                                  <Send className="h-3 w-3" />
+                                  Issue
+                                </Button>
+                              </ReconciliationModal>
+                            )}
+
+                            {rec.status === "Issued" && (
+                              <ReconciliationModal
+                                issueRecord={rec}
+                                initialMode="return"
+                                onSuccess={loadRecords}
+                              >
+                                <Button
+                                  size="sm"
+                                  className="h-7 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-normal gap-1"
+                                >
+                                  <TrendingUp className="h-3 w-3" />
+                                  Record Consumption
+                                </Button>
+                              </ReconciliationModal>
+                            )}
+
+                            <ReconciliationModal
+                              issueRecord={rec}
+                              initialMode="edit"
+                              onSuccess={loadRecords}
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-slate-400 hover:text-dvla-green hover:bg-slate-100"
+                                title="Edit Row"
+                              >
+                                <Edit3 className="h-3.5 w-3.5" />
+                              </Button>
+                            </ReconciliationModal>
+
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-7 w-7 text-blue-600 hover:text-blue-800 hover:bg-blue-50"
-                              title={`Reconcile dispatch #${rec.reference_number} / Track yield`}
+                              className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              title="Delete Row"
+                              disabled={deletingId === rec.id}
+                              onClick={() => handleDeleteRecord(rec)}
                             >
-                              <FileSignature className="h-4 w-4" />
+                              {deletingId === rec.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-red-500" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
                             </Button>
-                          </ReconciliationModal>
-
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                            title={`Delete dispatch record #${rec.reference_number}`}
-                            disabled={deletingId === rec.id}
-                            onClick={() => handleDeleteDispatch(rec)}
-                          >
-                            {deletingId === rec.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-red-500" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
-              </TableBody>
-            </Table>
-          </div>
+              </tbody>
 
-          {/* Full Pagination Bar */}
-          <div className="p-3.5 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-600 bg-slate-50/50 gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500">Show</span>
-                <Select
-                  value={String(pageSize)}
-                  onValueChange={(val) => {
-                    setPageSize(Number(val));
-                    setCurrentPage(1);
-                  }}
-                >
-                  <SelectTrigger className="h-8 w-[70px] bg-white text-xs font-semibold border-slate-300">
-                    <SelectValue placeholder="15" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="15">15</SelectItem>
-                    <SelectItem value="25">25</SelectItem>
-                    <SelectItem value="50">50</SelectItem>
-                    <SelectItem value="75">75</SelectItem>
-                    <SelectItem value="100">100</SelectItem>
-                  </SelectContent>
-                </Select>
-                <span className="text-slate-500">entries per page</span>
-              </div>
-              <span className="text-slate-300 hidden sm:inline">|</span>
-              <div className="text-slate-600">
-                Showing <span className="font-bold text-slate-800">{totalItems > 0 ? (currentPage - 1) * pageSize + 1 : 0}</span> to{" "}
-                <span className="font-bold text-slate-800">{Math.min(currentPage * pageSize, totalItems)}</span> of{" "}
-                <span className="font-bold text-slate-800">{totalItems}</span> dispatches
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2.5 text-xs border-slate-300 font-medium"
-                disabled={currentPage <= 1 || loading}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              >
-                <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                Previous
-              </Button>
-              
-              <span className="px-2 font-semibold text-slate-700 text-xs">
-                Page {currentPage} of {Math.max(1, Math.ceil(totalItems / pageSize))}
-              </span>
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2.5 text-xs border-slate-300 font-medium"
-                disabled={currentPage >= Math.ceil(totalItems / pageSize) || loading}
-                onClick={() => setCurrentPage((p) => p + 1)}
-              >
-                Next
-                <ChevronRight className="h-3.5 w-3.5 ml-1" />
-              </Button>
-            </div>
+              {records.length > 0 && (
+                <tfoot>
+                  <tr className="bg-slate-50 border-t border-slate-200 font-medium text-slate-800">
+                    <td className="py-3 px-4 border-r border-slate-200">
+                      Total
+                    </td>
+                    <td className="py-3 px-4 border-r border-slate-200 text-slate-500 font-normal">
+                      {records.length} records
+                    </td>
+                    <td className="py-3 px-4 text-center border-r border-slate-200">
+                      {tableTotals.totalReq.toLocaleString()}
+                    </td>
+                    <td className="py-3 px-4 text-center border-r border-slate-200 text-blue-700">
+                      {tableTotals.totalIss.toLocaleString()}
+                    </td>
+                    <td colSpan={3} className="border-r border-slate-200" />
+                    <td className="py-3 px-4 text-center border-r border-slate-200 text-slate-500 font-normal">
+                      Total Consumption
+                    </td>
+                    <td className="py-3 px-4 text-right border-r border-slate-200 text-emerald-700">
+                      {tableTotals.totalCons.toLocaleString()}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              )}
+            </table>
           </div>
         </div>
 
-        {/* Modal: Manage Consumable Types */}
+        {/* MODAL: MANAGE CONSUMABLE TYPES */}
         <Dialog open={manageTypesOpen} onOpenChange={setManageTypesOpen}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <DialogTitle className="flex items-center gap-2 text-base font-semibold">
                 <PackageOpen className="h-5 w-5 text-dvla-green" />
                 Manage Consumable Types
               </DialogTitle>
               <DialogDescription>
-                Add new consumable types or delete unused types from the system.
+                Add or remove consumable types classified under the Consumable Type column.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 pt-2">
+            <div className="space-y-4 py-2">
               {typeMsg && (
                 <div
-                  className={`flex items-start gap-2 p-3 rounded-lg text-xs font-medium ${
+                  className={`flex items-start gap-2 p-3 rounded-lg text-xs ${
                     typeMsg.type === "success"
                       ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
                       : "bg-red-50 border border-red-200 text-red-700"
@@ -533,78 +845,54 @@ function CategoriesContent() {
                   ) : (
                     <AlertCircle className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
                   )}
-                  <span className="leading-relaxed">{typeMsg.text}</span>
+                  <span>{typeMsg.text}</span>
                 </div>
               )}
 
-              {/* Add New Consumable Type */}
               <div className="flex items-end gap-2">
                 <div className="space-y-1.5 flex-1">
-                  <Label htmlFor="typeInput" className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                    New Type Name
+                  <Label className="text-xs font-normal text-slate-500">
+                    New Consumable Type Name
                   </Label>
                   <Input
-                    id="typeInput"
-                    placeholder="e.g. Laminating Pouches"
+                    placeholder="e.g. Laminate Film"
                     value={newCatName}
                     onChange={(e) => setNewCatName(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleAddCategory())}
-                    disabled={addingCat}
-                    className="h-9 text-xs"
                   />
                 </div>
                 <Button
                   onClick={handleAddCategory}
                   disabled={addingCat || !newCatName.trim()}
-                  className="bg-dvla-green hover:bg-dvla-green-light text-white h-9 shrink-0 font-semibold gap-1 text-xs"
+                  className="bg-dvla-green hover:bg-dvla-green-light text-white font-medium"
                 >
-                  {addingCat ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                  Add Type
+                  {addingCat ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add Type"}
                 </Button>
               </div>
 
-              {/* Active Consumable Types List */}
-              <div className="space-y-2">
-                <Label className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                  Active Consumable Types ({categories.length})
-                </Label>
-                <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white">
-                  {categories.map((cat) => (
-                    <div
-                      key={cat.id}
-                      className="flex items-center justify-between p-2.5 hover:bg-slate-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-slate-800">{cat.name}</span>
-                        {cat.code_prefix && (
-                          <Badge variant="outline" className="bg-slate-50 font-mono text-[10px] text-slate-500">
-                            {cat.code_prefix}
-                          </Badge>
-                        )}
-                        <Badge variant="secondary" className="text-[10px] font-normal text-slate-600 bg-slate-100">
-                          {cat.item_count ? `${cat.item_count} items` : "0 items"}
-                        </Badge>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                        title={`Delete consumable type "${cat.name}"`}
-                        disabled={deletingCatId === cat.id}
-                        onClick={() => handleDeleteCategory(cat)}
-                      >
-                        {deletingCatId === cat.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin text-red-500" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
+              <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                {categories.map((cat) => (
+                  <div
+                    key={cat.id}
+                    className="flex items-center justify-between p-3 hover:bg-slate-50"
+                  >
+                    <div>
+                      <span className="text-sm font-medium text-slate-800">{cat.name}</span>
+                      <span className="ml-2 text-xs text-slate-400">
+                        ({cat.item_count || 0} requests)
+                      </span>
                     </div>
-                  ))}
-                  {categories.length === 0 && (
-                    <div className="p-4 text-center text-xs text-slate-500">No consumable types found.</div>
-                  )}
-                </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-slate-400 hover:text-red-600"
+                      disabled={deletingCatId === cat.id}
+                      onClick={() => handleDeleteCategory(cat)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
               </div>
             </div>
           </DialogContent>
@@ -616,7 +904,7 @@ function CategoriesContent() {
 
 export default function CategoriesPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-center">Loading...</div>}>
+    <Suspense fallback={<div className="p-8 text-center text-sm text-slate-400">Loading Consumables Return Sheet...</div>}>
       <CategoriesContent />
     </Suspense>
   );

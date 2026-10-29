@@ -1,121 +1,83 @@
 -- ============================================================
--- DVLA CONSUMABLES MANAGEMENT — Seed Data
+-- DVLA CONSUMABLES RETURN SHEET — Complete Seed Data
 -- ============================================================
 SET NAMES utf8mb4;
 SET foreign_key_checks = 0;
 
 -- ------------------------------------------------------------
--- STATIONS
+-- 1. CONSUMABLE TYPES (Matching Excel Return Sheet Columns)
 -- ------------------------------------------------------------
-INSERT INTO stations (name, region, address, contact_phone, is_head_office) VALUES
-('Head Office',  'Greater Accra', 'DVLA Headquarters, Accra',        '030-2222001', 1),
-('Accra',        'Greater Accra', 'Accra Regional Office',           '030-2222002', 0),
-('Tema',         'Greater Accra', 'Tema Regional Office',            '030-3033003', 0),
-('Kumasi',       'Ashanti',       'Kumasi Regional Office',          '032-2022004', 0),
-('Cape Coast',   'Central',       'Cape Coast Regional Office',      '033-2033005', 0),
-('Takoradi',     'Western',       'Takoradi Regional Office',        '031-2022006', 0),
-('Tamale',       'Northern',      'Tamale Regional Office',          '037-2020007', 0),
-('Ho',           'Volta',         'Ho Regional Office',              '036-2020008', 0),
-('Koforidua',    'Eastern',       'Koforidua Regional Office',       '034-2022009', 0),
-('Sunyani',      'Bono',          'Sunyani Regional Office',         '035-2022010', 0),
-('Bolgatanga',   'Upper East',    'Bolgatanga Regional Office',      '038-2021011', 0),
-('Wa',           'Upper West',    'Wa Regional Office',              '039-2020012', 0);
+INSERT IGNORE INTO categories (name, code_prefix, purpose, is_active) VALUES
+('Holo Patch',        'HOLO',  'printing', 1),
+('Color Ribbon',      'CLR',   'printing', 1),
+('MCC660 Holo Patch', 'MCCHP', 'printing', 1),
+('MCC660 Clear',      'MCCCL', 'printing', 1),
+('Black',             'BLK',   'printing', 1);
 
 -- ------------------------------------------------------------
--- DEPARTMENTS
+-- 2. DEFAULT ROLE ACCOUNTS (password for all: Admin@1234)
 -- ------------------------------------------------------------
-INSERT INTO departments (name) VALUES
-('IT'),
-('HR'),
-('Finance'),
-('Administration'),
-('Procurement'),
-('Operations'),
-('Vehicle Registration'),
-('Driver Licensing'),
-('Roadworthiness'),
-('Customer Service');
+INSERT IGNORE INTO users (first_name, last_name, email, phone, password_hash, role, status, must_change_password) VALUES
+('System',  'Administrator', 'admin@dvla.gov.gh',      '030-0000001', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Administrator',   'Active', 0),
+('Richard', 'Anafo',         'issuer@dvla.gov.gh',     '030-0000002', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Store Officer',   'Active', 0),
+('George',  'Adjei',         'requester@dvla.gov.gh',  '030-0000003', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Station Officer', 'Active', 0),
+('Thomas',  'Owusu Manu',    'supervisor@dvla.gov.gh', '030-0000004', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Supervisor',      'Active', 0),
+('Gideon',  'Odoom',         'viewer@dvla.gov.gh',     '030-0000005', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Viewer',          'Active', 0);
 
 -- ------------------------------------------------------------
--- CATEGORIES
+-- 3. FULL EXCEL CONSUMABLES RETURN SHEET RECORDS (Rows 6-47)
 -- ------------------------------------------------------------
-INSERT INTO categories (name, code_prefix, purpose) VALUES
-('YMCK',              'YMCK', 'printing'),
-('Holo Patch',        'HOLO', 'printing'),
-('Colour Ribbon',     'CLR',  'printing'),
-('Black Ribbon',      'BLK',  'printing'),
-('MCC660 Holo Patch', 'MCC',  'printing'),
-('MCC660 Clear',      'MCCC', 'printing'),
-('Toner',             'TNR',  'standard'),
-('Printer Ink',       'INK',  'standard'),
-('Other Consumables', 'OTH',  'standard');
+INSERT IGNORE INTO consumable_requests
+  (reference_number, date_requested, category_id, consumable_name, quantity_requested, quantity_issued, issued_by, requested_by, received_by, date_returned, total_consumption, status)
+VALUES
+  ('REQ-2026-0001', '2026-01-06', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        2,  2,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-01-06', 552,   'Completed'),
+  ('REQ-2026-0002', '2026-01-13', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        4,  4,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-01-13', 2019,  'Completed'),
+  ('REQ-2026-0003', '2026-01-13', (SELECT id FROM categories WHERE name = 'MCC660 Holo Patch' LIMIT 1), 'MCC660 Holo Patch', 10, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        NULL,         NULL,  'Issued'),
+  ('REQ-2026-0004', '2026-01-14', (SELECT id FROM categories WHERE name = 'MCC660 Holo Patch' LIMIT 1), 'MCC660 Holo Patch', 29, 39, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-01-14', 16617, 'Completed'),
+  ('REQ-2026-0005', '2026-01-20', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      17, 17, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-01-20', 16623, 'Completed'),
+  ('REQ-2026-0006', '2026-01-20', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      10, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-01-20', 10000, 'Completed'),
+  ('REQ-2026-0007', '2026-01-20', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        10, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-01-20', 5000,  'Completed'),
+  ('REQ-2026-0008', '2026-01-26', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      18, 18, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'KWAKU OPOKU WARE',    '2026-01-28', 17933, 'Completed'),
+  ('REQ-2026-0009', '2026-02-09', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      9,  9,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-02-09', 8755,  'Completed'),
+  ('REQ-2026-0010', '2026-02-05', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        6,  6,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-02-12', 3890,  'Completed'),
+  ('REQ-2026-0011', '2026-02-12', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      14, 14, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-02-12', 13905, 'Completed'),
+  ('REQ-2026-0012', '2026-02-16', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        20, 20, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-02-16', NULL,  'Issued'),
+  ('REQ-2026-0013', '2026-02-17', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      13, 13, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-02-17', 12911, 'Completed'),
+  ('REQ-2026-0014', '2026-02-20', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        24, 24, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-02-20', 14358, 'Completed'),
+  ('REQ-2026-0015', '2026-02-20', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      15, 15, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-02-20', 14484, 'Completed'),
+  ('REQ-2026-0016', '2026-03-04', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      14, 14, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-03-04', NULL,  'Issued'),
+  ('REQ-2026-0017', '2026-03-10', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        11, 11, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-03-10', 6397,  'Completed'),
+  ('REQ-2026-0018', '2026-03-11', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      6,  6,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-03-11', 5440,  'Completed'),
+  ('REQ-2026-0019', '2026-03-17', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        4,  4,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-03-17', 3131,  'Completed'),
+  ('REQ-2026-0020', '2026-03-16', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      7,  7,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-03-16', 6581,  'Completed'),
+  ('REQ-2026-0021', '2026-03-19', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      31, 31, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-04-08', 31000, 'Completed'),
+  ('REQ-2026-0022', '2026-03-26', (SELECT id FROM categories WHERE name = 'Black' LIMIT 1),             'Black',             10, 11, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-03-26', 516,   'Completed'),
+  ('REQ-2026-0023', '2026-04-08', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        20, 40, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-04-07', 24347, 'Completed'),
+  ('REQ-2026-0024', '2026-04-08', (SELECT id FROM categories WHERE name = 'MCC660 Clear' LIMIT 1),      'MCC660 Clear',      10, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-04-07', 12170, 'Completed'),
+  ('REQ-2026-0025', '2026-04-13', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        16, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-04-20', 10144, 'Completed'),
+  ('REQ-2026-0026', '2026-04-15', (SELECT id FROM categories WHERE name = 'Black' LIMIT 1),             'Black',             10, 10, 'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-04-15', 18659, 'Completed'),
+  ('REQ-2026-0027', '2026-04-20', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        2,  2,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-04-29', 1203,  'Completed'),
+  ('REQ-2026-0028', '2026-04-29', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      4,  4,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'KWAKU OPOKU WARE',    '2026-04-29', 4000,  'Completed'),
+  ('REQ-2026-0029', '2026-05-05', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      4,  4,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'YAKUBU HIDAYAATU',    '2026-05-05', 3631,  'Completed'),
+  ('REQ-2026-0030', '2026-05-05', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      6,  5,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'YAKUBU HIDAYAATU',    '2026-05-05', 5081,  'Completed'),
+  ('REQ-2026-0031', '2026-05-05', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      6,  2,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'OWUSU GODFRED TWUM',  '2026-05-08', 2150,  'Completed'),
+  ('REQ-2026-0032', '2026-05-08', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        2,  1,  'MR. RICHARD ANAFO', 'GEORGE ADJEI',      'GIDEON ODOOM',        '2026-05-29', 606,   'Completed'),
+  ('REQ-2026-0033', '2026-05-29', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        1,  4,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-06-16', 3941,  'Completed'),
+  ('REQ-2026-0034', '2026-06-10', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      4,  1,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-06-11', 805,   'Completed'),
+  ('REQ-2026-0035', '2026-06-10', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        1,  1,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'ASIAMAH SAMUEL OPOKU','2026-06-17', 602,   'Completed'),
+  ('REQ-2026-0036', '2026-06-12', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        1,  10, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-06-23', 9463,  'Completed'),
+  ('REQ-2026-0037', '2026-06-15', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      10, 2,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-06-17', 1626,  'Completed'),
+  ('REQ-2026-0038', '2026-06-17', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        2,  24, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-06-23', 32955, 'Completed'),
+  ('REQ-2026-0039', '2026-06-22', (SELECT id FROM categories WHERE name = 'MCC660 Holo Patch' LIMIT 1), 'MCC660 Holo Patch', 24, 11, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-06-23', 20928, 'Completed'),
+  ('REQ-2026-0040', '2026-06-23', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      11, 2,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'GIDEON ODOOM',        '2026-07-07', 1212,  'Completed'),
+  ('REQ-2026-0041', '2026-07-07', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        2,  4,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'YAKUBU HIDAYAATU',    '2026-07-13', 4000,  'Completed'),
+  ('REQ-2026-0042', '2026-07-09', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      4,  20, 'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-07-10', 32955, 'Completed'),
+  ('REQ-2026-0043', '2026-07-10', (SELECT id FROM categories WHERE name = 'MCC660 Holo Patch' LIMIT 1), 'MCC660 Holo Patch', 20, 3,  'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', 'OWUSU GODFRED TWUM',  '2026-07-13', 2749,  'Completed'),
+  ('REQ-2026-0044', '2026-07-13', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      3,  NULL,'MR. RICHARD ANAFO', 'THOMAS OWUSU MANU', NULL,                  NULL,         NULL,  'Pending Issue');
 
--- ------------------------------------------------------------
--- ADMIN USER (password: Admin@1234)
--- bcrypt hash of 'Admin@1234' with salt rounds = 12
--- ------------------------------------------------------------
-INSERT INTO users (first_name, last_name, email, phone, password_hash, role, station_id, department_id, status, must_change_password) VALUES
-('System', 'Administrator', 'admin@dvla.gov.gh', '030-0000001',
- '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q',
- 'Administrator',
- (SELECT id FROM stations WHERE name = 'Head Office'),
- (SELECT id FROM departments WHERE name = 'IT'),
- 'Active', 1);
-
--- ------------------------------------------------------------
--- SEED CONSUMABLES (matching mockData for continuity)
--- ------------------------------------------------------------
-INSERT INTO consumables (item_code, name, category_id, unit, station_id, department_id, supplier_default, received, issued, balance, reorder_level, max_stock_level, status) VALUES
-('CONS-001', 'YMCK Ribbon',
- (SELECT id FROM categories WHERE name = 'YMCK'),
- 'Roll',
- (SELECT id FROM stations WHERE name = 'Head Office'),
- (SELECT id FROM departments WHERE name = 'IT'),
- '', 200, 155, 45, 50, 500, 'LOW STOCK'),
-
-('CONS-002', 'Holo Patch',
- (SELECT id FROM categories WHERE name = 'Holo Patch'),
- 'Roll',
- (SELECT id FROM stations WHERE name = 'Accra'),
- (SELECT id FROM departments WHERE name = 'Operations'),
- '', 100, 20, 80, 25, 300, 'IN STOCK'),
-
-('CONS-004', 'Toner Cartridge',
- (SELECT id FROM categories WHERE name = 'Toner'),
- 'Piece',
- (SELECT id FROM stations WHERE name = 'Tema'),
- (SELECT id FROM departments WHERE name = 'IT'),
- '', 30, 5, 25, 5, 100, 'IN STOCK'),
-
-('CONS-006', 'Driver License Cards',
- (SELECT id FROM categories WHERE name = 'Other Consumables'),
- 'Pack',
- (SELECT id FROM stations WHERE name = 'Accra'),
- (SELECT id FROM departments WHERE name = 'Driver Licensing'),
- '', 1000, 800, 200, 150, 2000, 'IN STOCK');
-
--- ------------------------------------------------------------
--- SEED CARD PRINTING BATCHES
--- ------------------------------------------------------------
-INSERT INTO card_printing_batches (batch_code, consumable_id, date_issued, issued_to, quantity_issued, status, printed_cards, damaged_cards, recapture_cards) VALUES
-('CPB-2026-001',
- (SELECT id FROM consumables WHERE item_code = 'CONS-006'),
- '2026-09-14', 'Card Production Unit', 200, 'Pending', 0, 0, 0),
-
-('CPB-2026-002',
- (SELECT id FROM consumables WHERE item_code = 'CONS-006'),
- '2026-09-10', 'External Vendor A', 500, 'Reconciled', 485, 10, 5),
-
-('CPB-2026-003',
- (SELECT id FROM consumables WHERE item_code = 'CONS-001'),
- '2026-09-15', 'Card Production Unit (Accra)', 50, 'Pending', 0, 0, 0),
-
-('CPB-2026-004',
- (SELECT id FROM consumables WHERE item_code = 'CONS-002'),
- '2026-09-16', 'Security Printing Division', 30, 'Pending', 0, 0, 0),
-
-('CPB-2026-005',
- (SELECT id FROM consumables WHERE item_code = 'CONS-004'),
- '2026-09-16', 'IT Print Unit', 10, 'Pending', 0, 0, 0);
+INSERT IGNORE INTO system_migrations (migration_key) VALUES
+  ('return_sheet_v1'),
+  ('rbac_default_users_v1'),
+  ('cleanup_unused_tables_and_full_seed_v2');
 
 SET foreign_key_checks = 1;

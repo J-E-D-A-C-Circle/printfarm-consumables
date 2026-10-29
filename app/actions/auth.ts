@@ -13,9 +13,6 @@ interface DBUser {
   email: string;
   password_hash: string;
   role: "Administrator" | "Supervisor" | "Store Officer" | "Station Officer" | "Viewer";
-  station_id: number | null;
-  station_name: string | null;
-  department_id: number | null;
   status: string;
   must_change_password: number;
   failed_login_attempts: number;
@@ -38,10 +35,7 @@ export async function login(
   }
 
   const user = await queryOne<DBUser>(
-    `SELECT u.*, s.name AS station_name
-     FROM users u
-     LEFT JOIN stations s ON s.id = u.station_id
-     WHERE u.email = ? LIMIT 1`,
+    `SELECT * FROM users WHERE email = ? LIMIT 1`,
     [email]
   );
 
@@ -81,9 +75,9 @@ export async function login(
     email: user.email,
     name: `${user.first_name} ${user.last_name}`,
     role: user.role,
-    stationId: user.station_id,
-    stationName: user.station_name,
-    departmentId: user.department_id,
+    stationId: null,
+    stationName: null,
+    departmentId: null,
     mustChangePassword: user.must_change_password === 1,
   });
 

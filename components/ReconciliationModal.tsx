@@ -10,686 +10,672 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useState, useEffect } from "react";
 import {
   FileSignature,
-  CheckCircle2,
-  PlusCircle,
-  ChevronDown,
-  ChevronUp,
-  Edit3,
   Save,
-  X,
   AlertCircle,
-  Clock,
-  Layers,
+  TrendingUp,
+  Send,
+  Edit3,
+  Loader2,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 
-interface BatchItem {
+export interface ReturnSheetRecord {
   id: number;
-  batch_code: string;
-  issue_id?: number | null;
-  issue_reference?: string | null;
-  date_issued: string;
-  issued_to: string;
-  quantity_issued: number;
+  reference_number: string;
+  date_requested: string;
+  date_issued?: string;
+  category_id?: number | null;
+  consumable_name?: string;
+  category?: string;
+  item_name?: string;
+  quantity_requested?: number;
   expected_quantity?: number;
-  status: "Pending" | "Reconciled" | "Voided";
-  printed_cards: number;
-  damaged_cards: number;
-  recapture_cards: number;
-  unaccounted: number;
-  yield_percentage?: number | null;
-  waste_percentage?: number | null;
-  notes?: string | null;
-  reason_for_damage?: string | null;
-  date_of_reconciliation?: string | null;
+  quantity_issued?: number | null;
+  quantity?: number;
+  issued_by?: string | null;
+  requested_by?: string;
+  received_by?: string | null;
+  receiving_officer?: string | null;
+  date_returned?: string | null;
+  total_consumption?: number | null;
+  status?: "Pending Issue" | "Issued" | "Completed" | string;
+  remarks?: string | null;
 }
 
 interface ReconciliationModalProps {
   children: React.ReactNode;
-  item: {
+  item?: {
     id: number;
     name: string;
     item_code?: string;
   };
-  issueRecord?: {
-    id: number;
-    reference_number: string;
-    quantity: number;
-    expected_quantity?: number;
-    to_station?: string | null;
-    receiving_officer?: string | null;
-    batch_id?: number | null;
-  };
+  issueRecord: ReturnSheetRecord;
+  initialMode?: "issue" | "return" | "edit";
   onSuccess?: () => void;
 }
 
-export function ReconciliationModal({ children, item, issueRecord, onSuccess }: ReconciliationModalProps) {
+export function ReconciliationModal({
+  children,
+  issueRecord,
+  initialMode,
+  onSuccess,
+}: ReconciliationModalProps) {
   const [open, setOpen] = useState(false);
-  const [itemBatches, setItemBatches] = useState<BatchItem[]>([]);
-  const [loadingBatches, setLoadingBatches] = useState(false);
 
-  // Editing state for already existing / reconciled batches: batchId -> isEditing
-  const [editingBatchId, setEditingBatchId] = useState<number | null>(null);
+  const reqQty = Number(
+    issueRecord.quantity_requested ?? issueRecord.expected_quantity ?? issueRecord.quantity ?? 0
+  );
+  const currentIssuedQty =
+    issueRecord.quantity_issued !== undefined && issueRecord.quantity_issued !== null
+      ? Number(issueRecord.quantity_issued)
+      : issueRecord.status === "Pending Issue"
+      ? null
+      : Number(issueRecord.quantity ?? reqQty);
 
-  // Inputs for batch editing/reconciliation: batchId -> values
-  const [batchInputs, setBatchInputs] = useState<
-    Record<number, { printed: string; damaged: string; recapture: string; notes: string }>
-  >({});
-  const [submittingBatch, setSubmittingBatch] = useState<number | null>(null);
+  const consumableLabel =
+    issueRecord.consumable_name || issueRecord.category || issueRecord.item_name || "Consumable";
 
-  // New Batch Form state (for standalone batch or when no batch exists for dispatch)
-  const [showAddBatch, setShowAddBatch] = useState(false);
-  const [newIssuedTo, setNewIssuedTo] = useState("");
-  const [newQty, setNewQty] = useState("");
-  const [newExpectedQty, setNewExpectedQty] = useState("");
-  const [newPrinted, setNewPrinted] = useState("");
-  const [newDamaged, setNewDamaged] = useState("");
-  const [newRecapture, setNewRecapture] = useState("");
-  const [newNotes, setNewNotes] = useState("");
-  const [addingBatch, setAddingBatch] = useState(false);
+  const defaultTab =
+    initialMode ||
+    (issueRecord.status === "Pending Issue"
+      ? "issue"
+      : issueRecord.status === "Issued"
+      ? "return"
+      : "edit");
 
-  const loadBatches = useCallback(async () => {
-    if (!item?.id) return;
-    setLoadingBatches(true);
-    try {
-      const url = issueRecord?.id
-        ? `/api/batches?issue_id=${issueRecord.id}&_t=${Date.now()}`
-        : `/api/batches?consumable_id=${item.id}&_t=${Date.now()}`;
-      
-      const res = await fetch(url, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-      });
+  const [activeTab, setActiveTab] = useState<"issue" | "return" | "edit">(defaultTab);
 
-      if (res.ok) {
-        const d = await res.json();
-        let batches: BatchItem[] = d.data || [];
+  // Form states
+  const [dateRequested, setDateRequested] = useState(
+    (issueRecord.date_requested || issueRecord.date_issued || "").slice(0, 10)
+  );
+  const [consumableName, setConsumableName] = useState(consumableLabel);
+  const [quantityRequested, setQuantityRequested] = useState(String(reqQty));
+  const [requestedBy, setRequestedBy] = useState(issueRecord.requested_by || "");
 
-        // If queried by issue_id and nothing returned, fall back to checking consumable batches
-        if (issueRecord?.id && batches.length === 0) {
-          const fallbackRes = await fetch(`/api/batches?consumable_id=${item.id}&_t=${Date.now()}`);
-          if (fallbackRes.ok) {
-            const fd = await fallbackRes.json();
-            const allForConsumable: BatchItem[] = fd.data || [];
-            // Try matching by issue_id or issueRecord.batch_id
-            const matched = allForConsumable.filter(
-              (b) => b.issue_id === issueRecord.id || (issueRecord.batch_id && b.id === issueRecord.batch_id)
-            );
-            batches = matched;
-          }
-        }
+  const [quantityIssued, setQuantityIssued] = useState(
+    currentIssuedQty !== null ? String(currentIssuedQty) : String(reqQty)
+  );
+  const [issuedBy, setIssuedBy] = useState(issueRecord.issued_by || "MR. RICHARD ANAFO");
+  const [receivedBy, setReceivedBy] = useState(
+    issueRecord.received_by || issueRecord.receiving_officer || ""
+  );
 
-        setItemBatches(batches);
+  const [dateReturned, setDateReturned] = useState(
+    issueRecord.date_returned
+      ? issueRecord.date_returned.slice(0, 10)
+      : new Date().toISOString().split("T")[0]
+  );
+  const [totalConsumption, setTotalConsumption] = useState(
+    issueRecord.total_consumption !== null && issueRecord.total_consumption !== undefined
+      ? String(issueRecord.total_consumption)
+      : ""
+  );
+  const [remarks, setRemarks] = useState(issueRecord.remarks || "");
 
-        // Populate initial input values
-        const initialInputs: Record<number, { printed: string; damaged: string; recapture: string; notes: string }> = {};
-        batches.forEach((b) => {
-          initialInputs[b.id] = {
-            printed: b.printed_cards ? String(b.printed_cards) : "",
-            damaged: b.damaged_cards ? String(b.damaged_cards) : "",
-            recapture: b.recapture_cards ? String(b.recapture_cards) : "",
-            notes: b.notes || "",
-          };
-        });
-        setBatchInputs(initialInputs);
-
-        // If opened for a specific issue record and no batch exists yet, auto-show the creation form
-        if (issueRecord && batches.length === 0) {
-          setShowAddBatch(true);
-        } else {
-          setShowAddBatch(false);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to load item batches:", err);
-    } finally {
-      setLoadingBatches(false);
-    }
-  }, [item?.id, issueRecord]);
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      if (issueRecord) {
-        setNewIssuedTo(issueRecord.to_station || issueRecord.receiving_officer || "Production Unit");
-        setNewQty(String(issueRecord.quantity || ""));
-        setNewExpectedQty(String(issueRecord.expected_quantity || issueRecord.quantity || ""));
-        setNewPrinted("");
-        setNewDamaged("");
-        setNewRecapture("");
-        setNewNotes("");
-      }
-      loadBatches();
-    } else {
-      setEditingBatchId(null);
-      setShowAddBatch(false);
+      setError(null);
+      const nextMode =
+        initialMode ||
+        (issueRecord.status === "Pending Issue"
+          ? "issue"
+          : issueRecord.status === "Issued"
+          ? "return"
+          : "edit");
+      setActiveTab(nextMode);
+
+      const rQty = Number(
+        issueRecord.quantity_requested ?? issueRecord.expected_quantity ?? issueRecord.quantity ?? 0
+      );
+      const iQty =
+        issueRecord.quantity_issued !== undefined && issueRecord.quantity_issued !== null
+          ? Number(issueRecord.quantity_issued)
+          : issueRecord.status === "Pending Issue"
+          ? rQty
+          : Number(issueRecord.quantity ?? rQty);
+
+      setDateRequested(
+        (issueRecord.date_requested || issueRecord.date_issued || new Date().toISOString()).slice(0, 10)
+      );
+      setConsumableName(
+        issueRecord.consumable_name || issueRecord.category || issueRecord.item_name || "Holo Patch"
+      );
+      setQuantityRequested(String(rQty));
+      setRequestedBy(issueRecord.requested_by || "");
+      setQuantityIssued(String(iQty));
+      setIssuedBy(issueRecord.issued_by || "MR. RICHARD ANAFO");
+      setReceivedBy(issueRecord.received_by || issueRecord.receiving_officer || "");
+      setDateReturned(
+        issueRecord.date_returned
+          ? issueRecord.date_returned.slice(0, 10)
+          : new Date().toISOString().split("T")[0]
+      );
+      setTotalConsumption(
+        issueRecord.total_consumption !== null && issueRecord.total_consumption !== undefined
+          ? String(issueRecord.total_consumption)
+          : ""
+      );
+      setRemarks(issueRecord.remarks || "");
+
+      fetch("/api/categories")
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .then((d) => setCategories(d.data || []))
+        .catch(() => {});
     }
-  }, [open, issueRecord, loadBatches]);
+  }, [open, issueRecord, initialMode]);
 
-  const handleInputChange = (
-    batchId: number,
-    field: "printed" | "damaged" | "recapture" | "notes",
-    value: string
-  ) => {
-    setBatchInputs((prev) => ({
-      ...prev,
-      [batchId]: {
-        ...(prev[batchId] || { printed: "", damaged: "", recapture: "", notes: "" }),
-        [field]: value,
-      },
-    }));
-  };
+  const parsedReq = parseInt(quantityRequested) || 0;
+  const parsedIss = parseInt(quantityIssued) || 0;
+  const variance = parsedIss - parsedReq;
 
-  const handleReconcile = async (batchId: number) => {
-    setSubmittingBatch(batchId);
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+
     try {
-      const input = batchInputs[batchId] || { printed: "0", damaged: "0", recapture: "0", notes: "" };
-      const printed = parseInt(input.printed) || 0;
-      const damaged = parseInt(input.damaged) || 0;
-      const recapture = parseInt(input.recapture) || 0;
+      let payload: Record<string, unknown> = { id: issueRecord.id };
 
-      const res = await fetch(`/api/batches/${batchId}`, {
+      if (activeTab === "issue") {
+        if (quantityIssued.trim() === "" || parsedIss < 0) {
+          throw new Error("Please enter a valid Quantity Issued.");
+        }
+        if (!issuedBy.trim()) {
+          throw new Error("Please enter Issued By.");
+        }
+        if (!receivedBy.trim()) {
+          throw new Error("Please enter Received By.");
+        }
+        payload = {
+          id: issueRecord.id,
+          action: "issue",
+          quantity_issued: parsedIss,
+          issued_by: issuedBy.trim().toUpperCase(),
+          received_by: receivedBy.trim().toUpperCase(),
+          remarks: remarks.trim() || null,
+        };
+      } else if (activeTab === "return") {
+        const consVal = parseInt(totalConsumption);
+        if (totalConsumption.trim() === "" || Number.isNaN(consVal) || consVal < 0) {
+          throw new Error("Please enter the Total Consumption (work done out of the consumable).");
+        }
+        payload = {
+          id: issueRecord.id,
+          action: "return",
+          quantity_issued: parsedIss,
+          issued_by: issuedBy.trim().toUpperCase(),
+          received_by: receivedBy.trim().toUpperCase(),
+          date_returned: dateReturned || new Date().toISOString().split("T")[0],
+          total_consumption: consVal,
+          remarks: remarks.trim() || null,
+        };
+      } else {
+        payload = {
+          id: issueRecord.id,
+          action: "edit",
+          date_requested: dateRequested,
+          consumable_name: consumableName,
+          quantity_requested: parsedReq,
+          quantity_issued: quantityIssued.trim() === "" ? null : parsedIss,
+          issued_by: issuedBy.trim() ? issuedBy.trim().toUpperCase() : null,
+          requested_by: requestedBy.trim().toUpperCase(),
+          received_by: receivedBy.trim() ? receivedBy.trim().toUpperCase() : null,
+          date_returned: dateReturned.trim() || null,
+          total_consumption:
+            totalConsumption.trim() === "" ? null : parseInt(totalConsumption) || 0,
+          remarks: remarks.trim() || null,
+        };
+      }
+
+      const res = await fetch("/api/issues", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          printed_cards: printed,
-          damaged_cards: damaged,
-          recapture_cards: recapture,
-          notes: input.notes,
-          date_of_reconciliation: new Date().toISOString().split("T")[0],
-        }),
+        body: JSON.stringify(payload),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || "Failed to save reconciliation.");
+        throw new Error(data.error || "Failed to update record.");
       }
 
-      await loadBatches();
-      setEditingBatchId(null);
-      alert("Work done reconciliation saved successfully!");
+      setOpen(false);
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error saving reconciliation.");
+      setError(err instanceof Error ? err.message : "Error saving changes.");
     } finally {
-      setSubmittingBatch(null);
-    }
-  };
-
-  const handleAddNewBatch = async () => {
-    const qty = parseInt(newQty) || (issueRecord ? issueRecord.quantity : 0);
-    const recipient = newIssuedTo || (issueRecord ? (issueRecord.to_station || issueRecord.receiving_officer || "Station Officer") : "");
-
-    if (!recipient || !qty) {
-      alert("Please enter Issued To recipient and Quantity Issued.");
-      return;
-    }
-
-    setAddingBatch(true);
-    try {
-      const printed = parseInt(newPrinted) || 0;
-      const damaged = parseInt(newDamaged) || 0;
-      const recapture = parseInt(newRecapture) || 0;
-      const expQty = parseInt(newExpectedQty) || qty;
-
-      const isReconciled = printed > 0 || damaged > 0 || recapture > 0;
-
-      const res = await fetch("/api/batches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          consumable_id: item.id,
-          issue_id: issueRecord?.id || null,
-          date_issued: new Date().toISOString().split("T")[0],
-          issued_to: recipient,
-          quantity_issued: qty,
-          expected_quantity: expQty,
-          printed_cards: printed,
-          damaged_cards: damaged,
-          recapture_cards: recapture,
-          notes: newNotes,
-          status: isReconciled ? "Reconciled" : "Pending",
-        }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || "Failed to create reconciliation batch.");
-      }
-
-      await loadBatches();
-      setShowAddBatch(false);
-      alert("Work done reconciliation saved successfully!");
-      if (onSuccess) onSuccess();
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error saving batch.");
-    } finally {
-      setAddingBatch(false);
+      setSubmitting(false);
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="sm:max-w-4xl w-full max-h-[88vh] overflow-y-auto overflow-x-hidden p-6 sm:p-8">
-        <DialogHeader>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b">
-            <div className="flex items-center gap-2.5">
-              <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-                <FileSignature className="h-5 w-5 text-blue-700" />
+      <DialogContent className="sm:max-w-2xl w-full max-h-[90vh] overflow-y-auto overflow-x-hidden p-6 sm:p-7 border-slate-200">
+        <DialogHeader className="pb-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-lg bg-dvla-green/10 flex items-center justify-center shrink-0">
+                <FileSignature className="h-4 w-4 text-dvla-green" />
               </div>
               <div>
-                <DialogTitle className="text-xl font-bold text-slate-900">
-                  Work Done & Production Reconciliation
+                <DialogTitle className="text-lg font-semibold text-slate-900">
+                  {activeTab === "issue"
+                    ? "Issue Requested Consumable"
+                    : activeTab === "return"
+                    ? "Record Production Consumption"
+                    : "Edit Return Sheet Row"}
                 </DialogTitle>
-                <p className="text-xs text-slate-500 font-normal mt-0.5">
-                  <span className="font-semibold text-slate-700">{item.name}</span>
-                  {issueRecord ? ` — Dispatch Ref: #${issueRecord.reference_number}` : ""}
+                <p className="text-xs text-slate-500 mt-0.5">
+                  <span className="font-medium text-slate-700">{consumableName}</span> •{" "}
+                  <span>{issueRecord.reference_number}</span>
                 </p>
               </div>
             </div>
-            {!issueRecord && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs gap-1 bg-white text-blue-700 border-blue-300 hover:bg-blue-100 shrink-0"
-                onClick={() => setShowAddBatch(!showAddBatch)}
-              >
-                <PlusCircle className="h-3.5 w-3.5" />
-                {showAddBatch ? "Cancel" : "Add Reconciliation Batch"}
-                {showAddBatch ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              </Button>
-            )}
+
+            <Badge
+              variant="outline"
+              className={
+                issueRecord.status === "Completed"
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-200 font-normal"
+                  : issueRecord.status === "Issued"
+                  ? "bg-blue-50 text-blue-700 border-blue-200 font-normal"
+                  : "bg-amber-50 text-amber-700 border-amber-200 font-normal"
+              }
+            >
+              {issueRecord.status || "Pending Issue"}
+            </Badge>
           </div>
         </DialogHeader>
 
-        <div className="py-2 space-y-4 max-w-full overflow-x-hidden">
-          {/* Form to record/create work done */}
-          {showAddBatch && (
-            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-blue-950 uppercase tracking-wider flex items-center gap-1.5">
-                  <Layers className="h-4 w-4 text-blue-600" />
-                  {issueRecord ? "Record Work Done for this Dispatch" : "Record New Production Batch"}
-                </h4>
-                {issueRecord && (
-                  <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200 text-[11px]">
-                    Dispatch Ref #{issueRecord.reference_number}
-                  </Badge>
-                )}
+        {/* Clean Segmented Tabs */}
+        <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1 rounded-lg">
+          <button
+            type="button"
+            onClick={() => setActiveTab("issue")}
+            className={`py-2 px-3 rounded-md text-xs flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "issue"
+                ? "bg-white text-slate-900 shadow-xs font-medium"
+                : "text-slate-600 hover:text-slate-900 font-normal"
+            }`}
+          >
+            <Send className="h-3.5 w-3.5" />
+            1. Issue Qty
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("return")}
+            className={`py-2 px-3 rounded-md text-xs flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "return"
+                ? "bg-white text-slate-900 shadow-xs font-medium"
+                : "text-slate-600 hover:text-slate-900 font-normal"
+            }`}
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+            2. Record Consumption
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("edit")}
+            className={`py-2 px-3 rounded-md text-xs flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "edit"
+                ? "bg-white text-slate-900 shadow-xs font-medium"
+                : "text-slate-600 hover:text-slate-900 font-normal"
+            }`}
+          >
+            <Edit3 className="h-3.5 w-3.5" />
+            3. Edit Row
+          </button>
+        </div>
+
+        {/* Summary Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/70 p-4 rounded-xl border border-slate-200/80 text-xs">
+          <div>
+            <span className="text-slate-400 block text-[11px]">Date Requested</span>
+            <span className="font-medium text-slate-800 mt-0.5 block">{dateRequested || "—"}</span>
+          </div>
+          <div>
+            <span className="text-slate-400 block text-[11px]">Requested By</span>
+            <span className="font-medium text-slate-800 truncate mt-0.5 block">{requestedBy || "—"}</span>
+          </div>
+          <div>
+            <span className="text-slate-400 block text-[11px]">Qty Requested</span>
+            <span className="font-medium text-slate-800 mt-0.5 block">{parsedReq}</span>
+          </div>
+          <div>
+            <span className="text-slate-400 block text-[11px]">Qty Issued</span>
+            <span className="font-medium text-blue-700 mt-0.5 block">
+              {quantityIssued !== "" ? parsedIss : "Pending"}
+            </span>
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-3.5 py-2.5 rounded-lg text-xs">
+            <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSave} className="space-y-5">
+          {activeTab === "issue" && (
+            <div className="p-5 rounded-xl border border-slate-200/80 bg-slate-50/40 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200/70 pb-2.5">
+                <div>
+                  <h4 className="text-xs font-medium text-slate-700">
+                    Issue Consumable Against Request
+                  </h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Give out the exact quantity requested ({parsedReq}), or enter more or less.
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    variance === 0
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200 font-normal"
+                      : variance < 0
+                      ? "bg-amber-50 text-amber-700 border-amber-200 font-normal"
+                      : "bg-blue-50 text-blue-700 border-blue-200 font-normal"
+                  }
+                >
+                  {variance === 0
+                    ? `Exact match (${parsedIss})`
+                    : variance < 0
+                    ? `${Math.abs(variance)} less than requested`
+                    : `+${variance} more than requested`}
+                </Badge>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-700 font-semibold">
-                    Issued To (Unit / Station) <span className="text-red-500">*</span>
-                  </Label>
-                  <Input
-                    placeholder="e.g. Card Production Unit"
-                    value={newIssuedTo}
-                    onChange={(e) => setNewIssuedTo(e.target.value)}
-                    className="bg-white text-xs h-8"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-700 font-semibold">
-                    Quantity Issued <span className="text-red-500">*</span>
-                  </Label>
-                  <Input
-                    type="number"
-                    min="1"
-                    placeholder="0"
-                    value={newQty}
-                    onChange={(e) => setNewQty(e.target.value)}
-                    className="bg-white text-xs h-8 font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-700 font-semibold">Expected Card Output</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-normal text-slate-500">
+                      Quantity Issued
+                    </Label>
+                    <button
+                      type="button"
+                      onClick={() => setQuantityIssued(String(parsedReq))}
+                      className="text-[11px] text-blue-600 hover:underline font-normal"
+                    >
+                      Use exact ({parsedReq})
+                    </button>
+                  </div>
                   <Input
                     type="number"
                     min="0"
-                    placeholder="Expected cards"
-                    value={newExpectedQty}
-                    onChange={(e) => setNewExpectedQty(e.target.value)}
-                    className="bg-white text-xs h-8 font-mono"
+                    value={quantityIssued}
+                    onChange={(e) => setQuantityIssued(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-medium text-blue-700"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Issued By
+                  </Label>
+                  <Input
+                    value={issuedBy}
+                    onChange={(e) => setIssuedBy(e.target.value)}
+                    placeholder="e.g. MR. RICHARD ANAFO"
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Received By
+                  </Label>
+                  <Input
+                    value={receivedBy}
+                    onChange={(e) => setReceivedBy(e.target.value)}
+                    placeholder="e.g. GIDEON ODOOM"
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "return" && (
+            <div className="p-5 rounded-xl border border-slate-200/80 bg-slate-50/40 space-y-4">
+              <div className="border-b border-slate-200/70 pb-2.5">
+                <h4 className="text-xs font-medium text-slate-700">
+                  Production Result — Total Consumption
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Record the date returned and total work done out of the {parsedIss} issued {consumableName}.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Date Returned
+                  </Label>
+                  <Input
+                    type="date"
+                    value={dateReturned}
+                    onChange={(e) => setDateReturned(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-normal"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Total Consumption (Work Done)
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="e.g. 16617"
+                    value={totalConsumption}
+                    onChange={(e) => setTotalConsumption(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-medium text-emerald-700"
+                    required
                   />
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-blue-100">
-                <p className="text-xs font-bold text-slate-800 mb-2">Work Done & Output Metrics</p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-slate-700 font-medium">Printed Cards (Good)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={newPrinted}
-                      onChange={(e) => setNewPrinted(e.target.value)}
-                      className="bg-white text-xs h-8 font-mono font-bold text-green-700"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-slate-700 font-medium">Damaged Cards (Spoilage)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={newDamaged}
-                      onChange={(e) => setNewDamaged(e.target.value)}
-                      className="bg-white text-xs h-8 font-mono font-bold text-orange-600"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-slate-700 font-medium">Recaptured Cards</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={newRecapture}
-                      onChange={(e) => setNewRecapture(e.target.value)}
-                      className="bg-white text-xs h-8 font-mono font-bold text-blue-600"
-                    />
-                  </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-3 border-t border-slate-200/70">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Qty Issued</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={quantityIssued}
+                    onChange={(e) => setQuantityIssued(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-normal"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Issued By</Label>
+                  <Input
+                    value={issuedBy}
+                    onChange={(e) => setIssuedBy(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Received By</Label>
+                  <Input
+                    value={receivedBy}
+                    onChange={(e) => setReceivedBy(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                  />
                 </div>
               </div>
+            </div>
+          )}
 
-              <div className="space-y-1 pt-1">
-                <Label className="text-xs text-slate-700 font-medium">Notes / Damage Reason (Optional)</Label>
-                <Input
-                  placeholder="e.g. Printer calibration error, defect ribbons, clean batch"
-                  value={newNotes}
-                  onChange={(e) => setNewNotes(e.target.value)}
-                  className="bg-white text-xs h-8"
-                />
+          {activeTab === "edit" && (
+            <div className="p-5 rounded-xl border border-slate-200/80 bg-slate-50/40 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Date Requested</Label>
+                  <Input
+                    type="date"
+                    value={dateRequested}
+                    onChange={(e) => setDateRequested(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Consumable Type</Label>
+                  <Select value={consumableName} onValueChange={setConsumableName}>
+                    <SelectTrigger className="bg-white border-slate-200 h-9 text-xs font-normal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={c.name}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Quantity Requested</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={quantityRequested}
+                    onChange={(e) => setQuantityRequested(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Quantity Issued
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Leave blank if Pending Issue"
+                    value={quantityIssued}
+                    onChange={(e) => setQuantityIssued(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-medium text-blue-700"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Requested By</Label>
+                  <Input
+                    value={requestedBy}
+                    onChange={(e) => setRequestedBy(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Issued By</Label>
+                  <Input
+                    value={issuedBy}
+                    onChange={(e) => setIssuedBy(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Received By</Label>
+                  <Input
+                    value={receivedBy}
+                    onChange={(e) => setReceivedBy(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs uppercase font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-normal text-slate-500">Date Returned</Label>
+                  <Input
+                    type="date"
+                    value={dateReturned}
+                    onChange={(e) => setDateReturned(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-normal"
+                  />
+                </div>
+
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label className="text-xs font-normal text-slate-500">
+                    Total Consumption (Work Done)
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Leave blank if not yet returned"
+                    value={totalConsumption}
+                    onChange={(e) => setTotalConsumption(e.target.value)}
+                    className="bg-white border-slate-200 h-9 text-xs font-medium text-emerald-700"
+                  />
+                </div>
               </div>
+            </div>
+          )}
 
-              <div className="flex justify-end pt-2 gap-2">
-                {!issueRecord && (
-                  <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setShowAddBatch(false)}>
-                    Cancel
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  disabled={addingBatch || !newQty}
-                  className="bg-dvla-green hover:bg-dvla-green-light text-white h-8 text-xs font-semibold px-4 gap-1.5"
-                  onClick={handleAddNewBatch}
-                >
+          <div className="space-y-1.5">
+            <Label className="text-xs text-slate-500 font-normal">Remarks (Optional)</Label>
+            <Input
+              placeholder="Optional notes..."
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              className="bg-white border-slate-200 h-9 text-xs font-normal"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={submitting}
+              className="h-9 text-xs font-normal border-slate-200"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={submitting}
+              className="bg-dvla-green hover:bg-dvla-green-light text-white h-9 text-xs font-medium px-5 gap-1.5"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving...
+                </>
+              ) : (
+                <>
                   <Save className="h-3.5 w-3.5" />
-                  {addingBatch ? "Saving Work Done..." : "Save Work Done & Reconcile"}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {loadingBatches ? (
-            <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed text-slate-500 text-xs">
-              Loading reconciliation records...
-            </div>
-          ) : itemBatches.length === 0 && !showAddBatch ? (
-            <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed space-y-3">
-              <FileSignature className="h-9 w-9 text-slate-400 mx-auto" />
-              <p className="text-slate-700 font-semibold text-sm">No reconciliation batch found for this record.</p>
-              <Button
-                size="sm"
-                className="h-8 text-xs gap-1.5 bg-dvla-green hover:bg-dvla-green-light text-white"
-                onClick={() => setShowAddBatch(true)}
-              >
-                <PlusCircle className="h-3.5 w-3.5" />
-                Record Work Done Now
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {itemBatches.map((batch) => {
-                const isPending = batch.status === "Pending";
-                const isEditing = editingBatchId === batch.id;
-                const inputs = batchInputs[batch.id] || {
-                  printed: String(batch.printed_cards || ""),
-                  damaged: String(batch.damaged_cards || ""),
-                  recapture: String(batch.recapture_cards || ""),
-                  notes: batch.notes || "",
-                };
-
-                const calcYield = batch.yield_percentage !== null && batch.yield_percentage !== undefined
-                  ? `${batch.yield_percentage}%`
-                  : batch.quantity_issued > 0 && batch.printed_cards > 0
-                  ? `${((batch.printed_cards / batch.quantity_issued) * 100).toFixed(1)}%`
-                  : "0%";
-
-                const calcWaste = batch.waste_percentage !== null && batch.waste_percentage !== undefined
-                  ? `${batch.waste_percentage}%`
-                  : batch.quantity_issued > 0 && batch.damaged_cards > 0
-                  ? `${((batch.damaged_cards / batch.quantity_issued) * 100).toFixed(1)}%`
-                  : "0%";
-
-                return (
-                  <div
-                    key={batch.id}
-                    className={`p-4 rounded-xl border transition-all ${
-                      isPending
-                        ? "bg-amber-50/30 border-amber-200"
-                        : "bg-white shadow-xs border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    {/* Header: Batch Code & Status */}
-                    <div className="flex justify-between items-start mb-3 gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-slate-900 text-sm font-mono">{batch.batch_code}</h4>
-                          {batch.issue_reference && (
-                            <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-700">
-                              Ref #{batch.issue_reference}
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Issued to: <span className="font-medium text-slate-700">{batch.issued_to}</span> on{" "}
-                          {batch.date_issued ? batch.date_issued.slice(0, 10) : "—"}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant="outline"
-                          className={
-                            isPending
-                              ? "bg-amber-100 text-amber-800 border-amber-300 font-semibold"
-                              : "bg-green-100 text-green-800 border-green-300 font-semibold flex items-center gap-1"
-                          }
-                        >
-                          {isPending ? (
-                            <>
-                              <Clock className="h-3 w-3" /> Pending
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle2 className="h-3 w-3 text-green-600" /> Reconciled
-                            </>
-                          )}
-                        </Badge>
-                        {!isPending && !isEditing && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 text-xs text-blue-600 hover:bg-blue-50 gap-1 px-2"
-                            onClick={() => {
-                              setEditingBatchId(batch.id);
-                              setBatchInputs((prev) => ({
-                                ...prev,
-                                [batch.id]: {
-                                  printed: String(batch.printed_cards || "0"),
-                                  damaged: String(batch.damaged_cards || "0"),
-                                  recapture: String(batch.recapture_cards || "0"),
-                                  notes: batch.notes || "",
-                                },
-                              }));
-                            }}
-                          >
-                            <Edit3 className="h-3.5 w-3.5" /> Edit
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Stats summary banner */}
-                    <div className="mb-3 grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-50/80 p-2.5 rounded-lg border border-slate-100 text-xs">
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Quantity Issued</span>
-                        <span className="font-bold text-slate-900 font-mono text-sm">{batch.quantity_issued}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Expected Cards</span>
-                        <span className="font-bold text-blue-700 font-mono text-sm">
-                          {batch.expected_quantity || batch.quantity_issued}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Yield Rate</span>
-                        <span className="font-bold text-green-700 font-mono text-sm">{calcYield}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 block text-[11px]">Waste Rate</span>
-                        <span className="font-bold text-orange-600 font-mono text-sm">{calcWaste}</span>
-                      </div>
-                    </div>
-
-                    {/* Pending form OR Active Editing mode */}
-                    {isPending || isEditing ? (
-                      <div className="space-y-3 pt-2 border-t border-slate-100">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div className="space-y-1">
-                            <Label htmlFor={`printed-${batch.id}`} className="text-xs text-slate-700 font-semibold">
-                              Printed Cards (Good) <span className="text-red-500">*</span>
-                            </Label>
-                            <Input
-                              id={`printed-${batch.id}`}
-                              type="number"
-                              min="0"
-                              placeholder="0"
-                              value={inputs.printed}
-                              onChange={(e) => handleInputChange(batch.id, "printed", e.target.value)}
-                              className="bg-white text-xs h-8 font-mono font-bold text-green-700"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label htmlFor={`damaged-${batch.id}`} className="text-xs text-slate-700 font-semibold">
-                              Damaged Cards (Spoilage)
-                            </Label>
-                            <Input
-                              id={`damaged-${batch.id}`}
-                              type="number"
-                              min="0"
-                              placeholder="0"
-                              value={inputs.damaged}
-                              onChange={(e) => handleInputChange(batch.id, "damaged", e.target.value)}
-                              className="bg-white text-xs h-8 font-mono font-bold text-orange-600"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label htmlFor={`recapture-${batch.id}`} className="text-xs text-slate-700 font-semibold">
-                              Recaptured Cards
-                            </Label>
-                            <Input
-                              id={`recapture-${batch.id}`}
-                              type="number"
-                              min="0"
-                              placeholder="0"
-                              value={inputs.recapture}
-                              onChange={(e) => handleInputChange(batch.id, "recapture", e.target.value)}
-                              className="bg-white text-xs h-8 font-mono font-bold text-blue-600"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <Label htmlFor={`notes-${batch.id}`} className="text-xs text-slate-600 font-medium">
-                            Notes / Damage Reason (Optional)
-                          </Label>
-                          <Input
-                            id={`notes-${batch.id}`}
-                            placeholder="e.g. Printer jam on station, defective batch"
-                            value={inputs.notes}
-                            onChange={(e) => handleInputChange(batch.id, "notes", e.target.value)}
-                            className="bg-white text-xs h-8"
-                          />
-                        </div>
-
-                        <div className="flex justify-end gap-2 pt-1">
-                          {isEditing && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 text-xs"
-                              onClick={() => setEditingBatchId(null)}
-                            >
-                              <X className="h-3.5 w-3.5 mr-1" /> Cancel
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            onClick={() => handleReconcile(batch.id)}
-                            disabled={submittingBatch === batch.id || (!inputs.printed && !inputs.damaged && !inputs.recapture)}
-                            className="bg-dvla-green hover:bg-dvla-green-light text-white text-xs h-8 font-semibold px-4 gap-1.5"
-                          >
-                            <Save className="h-3.5 w-3.5" />
-                            {submittingBatch === batch.id
-                              ? "Saving..."
-                              : isEditing
-                              ? "Update Reconciliation"
-                              : "Submit Reconciliation"}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Display Reconciled Summary */
-                      <div className="pt-2 border-t border-slate-100">
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <span className="text-slate-500 block mb-0.5">Printed (Good)</span>
-                            <span className="font-bold text-green-700 flex items-center gap-1 font-mono text-sm">
-                              <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-                              {batch.printed_cards}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-0.5">Damaged (Waste)</span>
-                            <span className="font-bold text-orange-600 font-mono text-sm">
-                              {batch.damaged_cards}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-0.5">Recaptured</span>
-                            <span className="font-bold text-blue-600 font-mono text-sm">
-                              {batch.recapture_cards}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block mb-0.5">Unaccounted</span>
-                            <span className="font-bold text-slate-700 font-mono text-sm">
-                              {batch.unaccounted ?? 0}
-                            </span>
-                          </div>
-                        </div>
-
-                        {(batch.notes || batch.reason_for_damage) && (
-                          <div className="mt-2 text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100">
-                            <span className="font-semibold text-slate-700">Notes: </span>
-                            {[batch.reason_for_damage, batch.notes].filter(Boolean).join(" | ")}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                  {activeTab === "issue"
+                    ? "Confirm & Issue"
+                    : activeTab === "return"
+                    ? "Save Consumption"
+                    : "Save Changes"}
+                </>
+              )}
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
   );

@@ -1,214 +1,567 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, execute, queryOne } from "@/lib/db";
-import { getSessionFromRequest } from "@/lib/auth";
+import {
+  getSessionFromRequest,
+  canCreateRequest,
+  canIssueConsumable,
+  canRecordConsumption,
+  canEditRow,
+  canDeleteRow,
+} from "@/lib/auth";
 import { logAudit, getClientIp } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// ── GET /api/issues ───────────────────────────────────────────────────────────
+// ── GET /api/issues (Consumables Return Sheet Records) ────────────────────────
 export async function GET(req: NextRequest) {
   const session = await getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = req.nextUrl;
-  const search     = searchParams.get("search") || "";
-  const dateFrom   = searchParams.get("from") || "";
-  const dateTo     = searchParams.get("to") || "";
-  const category   = searchParams.get("category") || "";
-  const stationParam = searchParams.get("station") || "";
-  const page  = parseInt(searchParams.get("page") || "1");
-  const limit = parseInt(searchParams.get("limit") || "50");
-  const offset = (page - 1) * limit;
+  const search   = searchParams.get("search") || "";
+  const dateFrom = searchParams.get("from") || "";
+  const dateTo   = searchParams.get("to") || "";
+  const category = searchParams.get("category") || "";
+  const status   = searchParams.get("status") || "";
+  const page     = Math.max(1, parseInt(searchParams.get("page") || "1"));
+  const limit    = Math.max(1, parseInt(searchParams.get("limit") || "100"));
+  const offset   = (page - 1) * limit;
 
-  const conditions: string[] = ["c.is_active = 1"];
+  const conditions: string[] = [];
   const params: unknown[] = [];
 
   if (search) {
-    conditions.push("(c.name LIKE ? OR i.reference_number LIKE ? OR i.receiving_officer LIKE ?)");
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    conditions.push(
+      `(r.consumable_name LIKE ? OR r.reference_number LIKE ? OR r.requested_by LIKE ? OR r.issued_by LIKE ? OR r.received_by LIKE ?)`
+    );
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
-  if (dateFrom) { conditions.push("i.date_issued >= ?"); params.push(dateFrom); }
-  if (dateTo)   { conditions.push("i.date_issued <= ?"); params.push(dateTo); }
-  if (category) { conditions.push("cat.name = ?"); params.push(category); }
-  if (stationParam) { conditions.push("ts.name = ?"); params.push(stationParam); }
+  if (dateFrom) {
+    conditions.push(`r.date_requested >= ?`);
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    conditions.push(`r.date_requested <= ?`);
+    params.push(dateTo);
+  }
+  if (category && category !== "all") {
+    conditions.push(`LOWER(r.consumable_name) = LOWER(?)`);
+    params.push(category);
+  }
+  if (status && status !== "all") {
+    conditions.push(`r.status = ?`);
+    params.push(status);
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
   const rows = await query(
-    `SELECT i.*,
-       c.name AS item_name, c.item_code, c.unit,
-       cat.name AS category,
-       fs.name AS from_station,
-       ts.name AS to_station,
-       d.name  AS department,
-       CONCAT(iu.first_name,' ',iu.last_name) AS issued_by_name,
-       CONCAT(au.first_name,' ',au.last_name) AS authorized_by_name
-     FROM stock_issues i
-     LEFT JOIN consumables  c   ON c.id   = i.consumable_id
-     LEFT JOIN categories   cat ON cat.id = c.category_id
-     LEFT JOIN stations     fs  ON fs.id  = i.from_station_id
-     LEFT JOIN stations     ts  ON ts.id  = i.to_station_id
-     LEFT JOIN departments  d   ON d.id   = i.department_id
-     LEFT JOIN users        iu  ON iu.id  = i.issuing_user_id
-     LEFT JOIN users        au  ON au.id  = i.authorized_by_user_id
+    `SELECT 
+       r.*,
+       r.consumable_name AS category,
+       r.consumable_name AS item_name,
+       r.quantity_requested AS expected_quantity,
+       COALESCE(r.quantity_issued, 0) AS quantity,
+       r.date_requested AS date_issued,
+       r.received_by AS receiving_officer
+     FROM consumable_requests r
      ${where}
-     ORDER BY i.date_issued DESC, i.id DESC
+     ORDER BY r.date_requested DESC, r.id DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
 
-  const [countRow] = await query<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM stock_issues i
-     LEFT JOIN consumables c ON c.id = i.consumable_id
-     LEFT JOIN categories cat ON cat.id = c.category_id
-     LEFT JOIN stations ts ON ts.id = i.to_station_id
+  const [countRow] = await query<{
+    total: number;
+    pending_issue: number;
+    issued_pending_return: number;
+    completed: number;
+    total_requested_qty: number;
+    total_issued_qty: number;
+    total_consumption: number;
+  }>(
+    `SELECT 
+       COUNT(*) AS total,
+       COALESCE(SUM(CASE WHEN r.status = 'Pending Issue' THEN 1 ELSE 0 END), 0) AS pending_issue,
+       COALESCE(SUM(CASE WHEN r.status = 'Issued' THEN 1 ELSE 0 END), 0) AS issued_pending_return,
+       COALESCE(SUM(CASE WHEN r.status = 'Completed' THEN 1 ELSE 0 END), 0) AS completed,
+       COALESCE(SUM(r.quantity_requested), 0) AS total_requested_qty,
+       COALESCE(SUM(COALESCE(r.quantity_issued, 0)), 0) AS total_issued_qty,
+       COALESCE(SUM(COALESCE(r.total_consumption, 0)), 0) AS total_consumption
+     FROM consumable_requests r
      ${where}`,
     params
   );
 
-  return NextResponse.json({ data: rows, total: countRow?.total ?? 0, page, limit });
+  return NextResponse.json(
+    {
+      data: rows,
+      total: Number(countRow?.total ?? 0),
+      summary: {
+        total_requests: Number(countRow?.total ?? 0),
+        pending_issue: Number(countRow?.pending_issue ?? 0),
+        issued_pending_return: Number(countRow?.issued_pending_return ?? 0),
+        completed: Number(countRow?.completed ?? 0),
+        total_requested_qty: Number(countRow?.total_requested_qty ?? 0),
+        total_issued_qty: Number(countRow?.total_issued_qty ?? 0),
+        total_consumption: Number(countRow?.total_consumption ?? 0),
+      },
+      page,
+      limit,
+    },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    }
+  );
 }
 
-// ── POST /api/issues ──────────────────────────────────────────────────────────
+// ── POST /api/issues (Create Request / Issue / Full Return Sheet Record) ──────
 export async function POST(req: NextRequest) {
   const session = await getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const allowedRoles = ["Administrator", "Supervisor", "Store Officer"];
-  if (!allowedRoles.includes(session.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!canCreateRequest(session.role)) {
+    return NextResponse.json(
+      { error: "Your role (Viewer) does not have permission to create consumable requests." },
+      { status: 403 }
+    );
   }
 
   const body = await req.json();
   const {
-    consumable_id, quantity, expected_quantity, from_station_id, to_station_id,
-    department_id, purpose, receiving_officer, authorized_by_user_id,
-    reference_number, requisition_number, remarks, date_issued,
-    // For printing batches
-    issued_to, expected_completion_date,
+    reference_number,
+    date_requested,
+    date_issued,
+    category_id,
+    consumable_name,
+    category,
+    quantity_requested,
+    quantity_issued,
+    quantity,
+    issued_by,
+    requested_by,
+    received_by,
+    receiving_officer,
+    date_returned,
+    total_consumption,
+    remarks,
   } = body;
 
-  if (!consumable_id || !quantity || !date_issued) {
-    return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
-  }
-  if (quantity <= 0) {
-    return NextResponse.json({ error: "Quantity must be greater than zero." }, { status: 400 });
-  }
+  const reqDate = date_requested || date_issued || new Date().toISOString().split("T")[0];
+  const reqQty = Number(quantity_requested ?? quantity ?? 0);
 
-  const expQty = expected_quantity !== undefined && expected_quantity !== null
-    ? Math.max(0, parseInt(expected_quantity) || 0)
-    : quantity;
-
-  // Lock check on the consumable
-  const consumable = await queryOne<{
-    balance: number; issued: number; reorder_level: number; name: string; category_id: number;
-  }>(
-    `SELECT balance, issued, reorder_level, name, category_id FROM consumables WHERE id = ? AND is_active = 1`,
-    [consumable_id]
-  );
-  if (!consumable) {
-    return NextResponse.json({ error: "Consumable not found or archived." }, { status: 404 });
-  }
-  if (quantity > consumable.balance) {
-    return NextResponse.json({
-      error: `Cannot issue ${quantity} — only ${consumable.balance} available.`
-    }, { status: 422 });
-  }
-
-  const newBalance = consumable.balance - quantity;
-  const newIssued  = consumable.issued + quantity;
-  const newStatus  = newBalance === 0 ? "OUT OF STOCK"
-    : newBalance <= consumable.reorder_level ? "LOW STOCK"
-    : "IN STOCK";
-
-  // Insert issue record
-  const issueResult = await execute(
-    `INSERT INTO stock_issues
-       (reference_number, requisition_number, consumable_id, quantity, expected_quantity,
-        from_station_id, to_station_id, department_id, purpose,
-        receiving_officer, issuing_user_id, authorized_by_user_id,
-        remarks, date_issued, balance_after)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [reference_number, requisition_number || null, consumable_id, quantity, expQty,
-     from_station_id || null, to_station_id || null, department_id || null,
-     purpose || "standard", receiving_officer || null,
-     session.id, authorized_by_user_id || null,
-     remarks || null, date_issued, newBalance]
-  );
-
-  // Auto-create tracking batch if purpose = printing or category purpose is printing or tracking requested
-  let batchId: number | null = null;
-  const recipient = issued_to || receiving_officer || "Station Officer";
-
-  const catObj = await queryOne<{ purpose: string }>(
-    `SELECT purpose FROM categories WHERE id = ?`,
-    [consumable.category_id]
-  );
-  const isPrintingPurpose = purpose === "printing" || catObj?.purpose === "printing" || Boolean(body.track_work);
-
-  if (isPrintingPurpose) {
-    const batchCode = `BATCH-${new Date().getFullYear()}-${issueResult.insertId}`;
-    const batchResult = await execute(
-      `INSERT INTO card_printing_batches
-         (batch_code, consumable_id, issue_id, date_issued, issued_to, quantity_issued, expected_quantity, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')`,
-      [batchCode, consumable_id, issueResult.insertId, date_issued, recipient, quantity, expQty]
+  if (reqQty <= 0) {
+    return NextResponse.json(
+      { error: "Quantity requested must be greater than zero." },
+      { status: 400 }
     );
-    batchId = batchResult.insertId;
-    // Link batch back to issue
-    await execute(`UPDATE stock_issues SET batch_id = ? WHERE id = ?`, [batchId, issueResult.insertId]);
   }
 
-  // Update consumable balance
-  await execute(
-    `UPDATE consumables SET balance = ?, issued = ?, status = ?, updated_by = ? WHERE id = ?`,
-    [newBalance, newIssued, newStatus, session.id, consumable_id]
-  );
+  // Resolve consumable type name & category_id
+  let resolvedCatId: number | null = category_id ? Number(category_id) : null;
+  let resolvedName: string = (consumable_name || category || "").trim();
 
-  // Fire LOW STOCK / OUT OF STOCK notifications
-  if (newStatus !== "IN STOCK") {
-    const supervisorUsers = await query<{ id: number }>(
-      `SELECT id FROM users WHERE role IN ('Administrator','Supervisor') AND status = 'Active'`
+  if (resolvedCatId && !resolvedName) {
+    const catRow = await queryOne<{ id: number; name: string }>(
+      `SELECT id, name FROM categories WHERE id = ?`,
+      [resolvedCatId]
     );
-    const notifType  = newStatus === "OUT OF STOCK" ? "out_of_stock" : "low_stock";
-    const notifTitle = newStatus === "OUT OF STOCK"
-      ? `OUT OF STOCK: ${consumable.name}`
-      : `Low Stock Alert: ${consumable.name}`;
-    const notifMsg = `Balance is now ${newBalance} units after issuing ${quantity} units.`;
-
-    for (const u of supervisorUsers) {
-      await execute(
-        `INSERT INTO notifications (user_id, type, title, message, link)
-         VALUES (?, ?, ?, ?, ?)`,
-        [u.id, notifType, notifTitle, notifMsg, `/consumables`]
-      );
+    if (catRow) resolvedName = catRow.name;
+  } else if (resolvedName && !resolvedCatId) {
+    const catRow = await queryOne<{ id: number; name: string }>(
+      `SELECT id, name FROM categories WHERE LOWER(name) = LOWER(?) LIMIT 1`,
+      [resolvedName]
+    );
+    if (catRow) {
+      resolvedCatId = catRow.id;
+      resolvedName = catRow.name;
     }
   }
 
+  if (!resolvedName) {
+    return NextResponse.json(
+      { error: "Please select a consumable type." },
+      { status: 400 }
+    );
+  }
+
+  const requester = (requested_by || session.name || "DVLA Officer").trim();
+  const hasIssuedQty =
+    quantity_issued !== undefined && quantity_issued !== null && String(quantity_issued).trim() !== "";
+  const parsedIssuedQty = hasIssuedQty ? Number(quantity_issued) : null;
+
+  const hasConsumption =
+    total_consumption !== undefined && total_consumption !== null && String(total_consumption).trim() !== "";
+  const parsedConsumption = hasConsumption ? Number(total_consumption) : null;
+
+  // Determine workflow status
+  let status: "Pending Issue" | "Issued" | "Completed" = "Pending Issue";
+  let finalIssuedQty = parsedIssuedQty;
+
+  if (parsedConsumption !== null && !Number.isNaN(parsedConsumption)) {
+    status = "Completed";
+    // If completed directly, default issued qty to requested qty if not explicitly set
+    if (finalIssuedQty === null || Number.isNaN(finalIssuedQty)) {
+      finalIssuedQty = reqQty;
+    }
+  } else if (finalIssuedQty !== null && !Number.isNaN(finalIssuedQty)) {
+    status = "Issued";
+  }
+
+  if (status !== "Pending Issue" && !canIssueConsumable(session.role)) {
+    return NextResponse.json(
+      { error: "Only Store Officers (Issuers), Supervisors, or Administrators can issue quantities directly." },
+      { status: 403 }
+    );
+  }
+
+  const finalIssuedBy =
+    status !== "Pending Issue"
+      ? (issued_by || session.name || "MR. RICHARD ANAFO").trim()
+      : issued_by
+      ? String(issued_by).trim()
+      : null;
+
+  const finalReceivedBy =
+    (received_by || receiving_officer || "").trim() || null;
+
+  const finalDateReturned =
+    status === "Completed"
+      ? date_returned || reqDate
+      : date_returned || null;
+
+  const refNum =
+    (reference_number || "").trim() ||
+    `REQ-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  const result = await execute(
+    `INSERT INTO consumable_requests
+       (reference_number, date_requested, category_id, consumable_name,
+        quantity_requested, quantity_issued, issued_by, requested_by,
+        received_by, date_returned, total_consumption, status, remarks, created_by, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      refNum,
+      reqDate,
+      resolvedCatId,
+      resolvedName,
+      reqQty,
+      finalIssuedQty,
+      finalIssuedBy,
+      requester,
+      finalReceivedBy,
+      finalDateReturned,
+      parsedConsumption,
+      status,
+      remarks ? String(remarks).trim() : null,
+      session.id,
+      session.id,
+    ]
+  );
+
   await logAudit({
-    userId: session.id, userName: session.name,
-    action: "ISSUE_STOCK", tableName: "stock_issues",
-    recordId: issueResult.insertId,
-    oldValues: { balance: consumable.balance },
-    newValues: { balance: newBalance, quantity_issued: quantity, reference_number, batch_id: batchId },
+    userId: session.id,
+    userName: session.name,
+    action: "CREATE_CONSUMABLE_REQUEST",
+    tableName: "consumable_requests",
+    recordId: result.insertId,
+    newValues: {
+      reference_number: refNum,
+      consumable_name: resolvedName,
+      quantity_requested: reqQty,
+      quantity_issued: finalIssuedQty,
+      total_consumption: parsedConsumption,
+      status,
+    },
     ipAddress: getClientIp(req.headers),
   });
 
+  return NextResponse.json(
+    {
+      id: result.insertId,
+      reference_number: refNum,
+      status,
+    },
+    { status: 201 }
+  );
+}
+
+// ── PUT /api/issues (Issue Consumable, Record Consumption Return, or Edit) ────
+export async function PUT(req: NextRequest) {
+  const session = await getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json();
+  const {
+    id,
+    action, // "issue" | "return" | "edit"
+    date_requested,
+    category_id,
+    consumable_name,
+    quantity_requested,
+    quantity_issued,
+    issued_by,
+    requested_by,
+    received_by,
+    date_returned,
+    total_consumption,
+    remarks,
+  } = body;
+
+  if (!id) {
+    return NextResponse.json({ error: "Record ID is required." }, { status: 400 });
+  }
+
+  const existing = await queryOne<{
+    id: number;
+    reference_number: string;
+    date_requested: string;
+    category_id: number | null;
+    consumable_name: string;
+    quantity_requested: number;
+    quantity_issued: number | null;
+    issued_by: string | null;
+    requested_by: string;
+    received_by: string | null;
+    date_returned: string | null;
+    total_consumption: number | null;
+    status: "Pending Issue" | "Issued" | "Completed";
+    remarks: string | null;
+  }>(`SELECT * FROM consumable_requests WHERE id = ?`, [Number(id)]);
+
+  if (!existing) {
+    return NextResponse.json({ error: "Consumable request record not found." }, { status: 404 });
+  }
+
+  // Stage 2: Issue Consumable (Exact, More, or Less than Requested)
+  if (action === "issue") {
+    if (!canIssueConsumable(session.role)) {
+      return NextResponse.json(
+        { error: "Only Store Officers (Issuers), Supervisors, or Administrators can issue consumables." },
+        { status: 403 }
+      );
+    }
+    const parsedIssued =
+      quantity_issued !== undefined && quantity_issued !== null && String(quantity_issued).trim() !== ""
+        ? Number(quantity_issued)
+        : existing.quantity_requested;
+
+    if (parsedIssued < 0 || Number.isNaN(parsedIssued)) {
+      return NextResponse.json({ error: "Please enter a valid quantity issued." }, { status: 400 });
+    }
+
+    const issuer = (issued_by || existing.issued_by || session.name || "MR. RICHARD ANAFO").trim();
+    const receiver = (received_by || existing.received_by || "").trim() || null;
+    const nextStatus = existing.total_consumption !== null ? "Completed" : "Issued";
+
+    await execute(
+      `UPDATE consumable_requests
+       SET quantity_issued = ?,
+           issued_by = ?,
+           received_by = ?,
+           status = ?,
+           remarks = COALESCE(?, remarks),
+           updated_by = ?
+       WHERE id = ?`,
+      [parsedIssued, issuer, receiver, nextStatus, remarks ?? null, session.id, existing.id]
+    );
+
+    return NextResponse.json({
+      success: true,
+      id: existing.id,
+      status: nextStatus,
+      quantity_issued: parsedIssued,
+    });
+  }
+
+  // Stage 3: Record Production Result (Date Returned & Total Consumption / Work Done)
+  if (action === "return" || action === "reconcile") {
+    if (!canRecordConsumption(session.role)) {
+      return NextResponse.json(
+        { error: "Your role does not have permission to record consumption outcomes." },
+        { status: 403 }
+      );
+    }
+    const parsedConsumption =
+      total_consumption !== undefined && total_consumption !== null && String(total_consumption).trim() !== ""
+        ? Number(total_consumption)
+        : null;
+
+    if (parsedConsumption === null || parsedConsumption < 0 || Number.isNaN(parsedConsumption)) {
+      return NextResponse.json(
+        { error: "Please enter a valid Total Consumption (work done outcome)." },
+        { status: 400 }
+      );
+    }
+
+    const finalIssued =
+      quantity_issued !== undefined && quantity_issued !== null && String(quantity_issued).trim() !== ""
+        ? Number(quantity_issued)
+        : existing.quantity_issued ?? existing.quantity_requested;
+
+    const finalIssuedBy = (issued_by || existing.issued_by || session.name || "MR. RICHARD ANAFO").trim();
+    const finalReceivedBy = (received_by || existing.received_by || "").trim() || null;
+    const finalDateReturned = date_returned || existing.date_returned || new Date().toISOString().split("T")[0];
+
+    await execute(
+      `UPDATE consumable_requests
+       SET quantity_issued = ?,
+           issued_by = ?,
+           received_by = ?,
+           date_returned = ?,
+           total_consumption = ?,
+           status = 'Completed',
+           remarks = COALESCE(?, remarks),
+           updated_by = ?
+       WHERE id = ?`,
+      [
+        finalIssued,
+        finalIssuedBy,
+        finalReceivedBy,
+        finalDateReturned,
+        parsedConsumption,
+        remarks ?? null,
+        session.id,
+        existing.id,
+      ]
+    );
+
+    return NextResponse.json({
+      success: true,
+      id: existing.id,
+      status: "Completed",
+      total_consumption: parsedConsumption,
+      date_returned: finalDateReturned,
+    });
+  }
+
+  // Full Edit of any field on the record
+  if (!canEditRow(session.role)) {
+    return NextResponse.json(
+      { error: "Only Store Officers, Supervisors, or Administrators can edit full return sheet records." },
+      { status: 403 }
+    );
+  }
+  let resolvedCatId = category_id !== undefined ? (category_id ? Number(category_id) : null) : existing.category_id;
+  let resolvedName = consumable_name !== undefined ? String(consumable_name).trim() : existing.consumable_name;
+
+  if (resolvedName && resolvedName.toLowerCase() !== existing.consumable_name.toLowerCase()) {
+    const catRow = await queryOne<{ id: number; name: string }>(
+      `SELECT id, name FROM categories WHERE LOWER(name) = LOWER(?) LIMIT 1`,
+      [resolvedName]
+    );
+    if (catRow) {
+      resolvedCatId = catRow.id;
+      resolvedName = catRow.name;
+    }
+  }
+
+  const nextReqDate = date_requested || existing.date_requested;
+  const nextReqQty =
+    quantity_requested !== undefined && quantity_requested !== null
+      ? Number(quantity_requested)
+      : existing.quantity_requested;
+
+  const hasIssuedInput = quantity_issued !== undefined;
+  const nextIssuedQty = hasIssuedInput
+    ? quantity_issued === null || String(quantity_issued).trim() === ""
+      ? null
+      : Number(quantity_issued)
+    : existing.quantity_issued;
+
+  const hasConsInput = total_consumption !== undefined;
+  const nextConsumption = hasConsInput
+    ? total_consumption === null || String(total_consumption).trim() === ""
+      ? null
+      : Number(total_consumption)
+    : existing.total_consumption;
+
+  const nextDateReturned =
+    date_returned !== undefined
+      ? date_returned && String(date_returned).trim() !== ""
+        ? String(date_returned).trim()
+        : null
+      : existing.date_returned;
+
+  const nextRequestedBy =
+    requested_by !== undefined && String(requested_by).trim()
+      ? String(requested_by).trim()
+      : existing.requested_by;
+
+  const nextIssuedBy =
+    issued_by !== undefined
+      ? String(issued_by).trim() || null
+      : existing.issued_by;
+
+  const nextReceivedBy =
+    received_by !== undefined
+      ? String(received_by).trim() || null
+      : existing.received_by;
+
+  const nextRemarks =
+    remarks !== undefined ? (String(remarks).trim() || null) : existing.remarks;
+
+  let nextStatus: "Pending Issue" | "Issued" | "Completed" = "Pending Issue";
+  if (nextConsumption !== null && !Number.isNaN(nextConsumption)) {
+    nextStatus = "Completed";
+  } else if (nextIssuedQty !== null && !Number.isNaN(nextIssuedQty)) {
+    nextStatus = "Issued";
+  }
+
+  await execute(
+    `UPDATE consumable_requests
+     SET date_requested = ?,
+         category_id = ?,
+         consumable_name = ?,
+         quantity_requested = ?,
+         quantity_issued = ?,
+         issued_by = ?,
+         requested_by = ?,
+         received_by = ?,
+         date_returned = ?,
+         total_consumption = ?,
+         status = ?,
+         remarks = ?,
+         updated_by = ?
+     WHERE id = ?`,
+    [
+      nextReqDate,
+      resolvedCatId,
+      resolvedName,
+      nextReqQty,
+      nextIssuedQty,
+      nextIssuedBy,
+      nextRequestedBy,
+      nextReceivedBy,
+      nextDateReturned,
+      nextConsumption,
+      nextStatus,
+      nextRemarks,
+      session.id,
+      existing.id,
+    ]
+  );
+
   return NextResponse.json({
-    id: issueResult.insertId,
-    reference_number,
-    new_balance: newBalance,
-    new_status: newStatus,
-    batch_id: batchId,
-  }, { status: 201 });
+    success: true,
+    id: existing.id,
+    status: nextStatus,
+  });
 }
 
 // ── DELETE /api/issues ────────────────────────────────────────────────────────
 export async function DELETE(req: NextRequest) {
   const session = await getSessionFromRequest(req);
-  if (!session || !["Administrator", "Supervisor", "Store Officer"].includes(session.role)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!canDeleteRow(session.role)) {
+    return NextResponse.json(
+      { error: "Only Supervisors or Administrators can delete return sheet records." },
+      { status: 403 }
+    );
   }
 
   const { searchParams } = req.nextUrl;
@@ -219,73 +572,34 @@ export async function DELETE(req: NextRequest) {
   }
 
   if (!id) {
-    return NextResponse.json({ error: "Stock issue ID is required." }, { status: 400 });
+    return NextResponse.json({ error: "Record ID is required." }, { status: 400 });
   }
 
-  const issueId = Number(id);
-  const issueRec = await queryOne<{
-    id: number;
-    reference_number: string;
-    consumable_id: number;
-    quantity: number;
-    batch_id: number | null;
-  }>(
-    `SELECT id, reference_number, consumable_id, quantity, batch_id FROM stock_issues WHERE id = ?`,
-    [issueId]
+  const recId = Number(id);
+  const existing = await queryOne<{ id: number; reference_number: string; consumable_name: string }>(
+    `SELECT id, reference_number, consumable_name FROM consumable_requests WHERE id = ?`,
+    [recId]
   );
 
-  if (!issueRec) {
-    return NextResponse.json({ error: "Stock issue record not found." }, { status: 404 });
+  if (!existing) {
+    return NextResponse.json({ error: "Record not found." }, { status: 404 });
   }
 
-  // Get current consumable data
-  const consumable = await queryOne<{
-    id: number;
-    name: string;
-    balance: number;
-    issued: number;
-    reorder_level: number;
-  }>(
-    `SELECT id, name, balance, issued, reorder_level FROM consumables WHERE id = ?`,
-    [issueRec.consumable_id]
-  );
-
-  if (consumable) {
-    const restoredBalance = consumable.balance + issueRec.quantity;
-    const restoredIssued  = Math.max(0, consumable.issued - issueRec.quantity);
-    const restoredStatus  = restoredBalance > consumable.reorder_level ? "IN STOCK"
-      : restoredBalance > 0 ? "LOW STOCK"
-      : "OUT OF STOCK";
-
-    await execute(
-      `UPDATE consumables SET balance = ?, issued = ?, status = ?, updated_by = ? WHERE id = ?`,
-      [restoredBalance, restoredIssued, restoredStatus, session.id, consumable.id]
-    );
-  }
-
-  // If there's a batch linked, delete it
-  if (issueRec.batch_id) {
-    await execute(`DELETE FROM card_printing_batches WHERE id = ?`, [issueRec.batch_id]);
-  }
-  await execute(`DELETE FROM card_printing_batches WHERE issue_id = ?`, [issueId]);
-
-  // Delete the stock issue record
-  await execute(`DELETE FROM stock_issues WHERE id = ?`, [issueId]);
+  await execute(`DELETE FROM consumable_requests WHERE id = ?`, [recId]);
 
   await logAudit({
     userId: session.id,
     userName: session.name,
-    action: "DELETE_STOCK_ISSUE",
-    tableName: "stock_issues",
-    recordId: issueId,
-    oldValues: { reference_number: issueRec.reference_number, quantity: issueRec.quantity },
+    action: "DELETE_CONSUMABLE_REQUEST",
+    tableName: "consumable_requests",
+    recordId: recId,
+    oldValues: existing,
     newValues: { deleted: true },
     ipAddress: getClientIp(req.headers),
   });
 
   return NextResponse.json({
     success: true,
-    message: `Dispatch record #${issueRec.reference_number} deleted. Restored ${issueRec.quantity} units to stock.`
+    message: `Record #${existing.reference_number} (${existing.consumable_name}) deleted successfully.`,
   });
 }
-

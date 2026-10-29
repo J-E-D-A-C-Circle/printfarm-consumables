@@ -1,4 +1,22 @@
 services:
+  nginx:
+    image: nginx:stable-alpine
+    container_name: dvla_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - dvla_network
+
   app:
     build:
       context: .
@@ -16,7 +34,7 @@ services:
       - DB_NAME=dvla_consumables
       - JWT_SECRET=f7c9d2a81e4b6f0c93a7d5e21b8f4c6a0d9e3f7b2c5a8e1d6f9b4c7a2e5d8f1
       - JWT_EXPIRES_IN=8h
-      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+      - NEXT_PUBLIC_APP_URL=http://localhost
       - NEXT_PUBLIC_APP_NAME=DVLA Consumables Management
     depends_on:
       db:
@@ -55,9 +73,10 @@ services:
     environment:
       PMA_HOST: db
       PMA_PORT: 3306
-      PMA_USER: dvla_user
-      PMA_PASSWORD: dvla_pass
+      PMA_ARBITRARY: 0
       UPLOAD_LIMIT: 64M
+    volumes:
+      - ./database/phpmyadmin.config.inc.php:/etc/phpmyadmin/config.user.inc.php:ro
     ports:
       - "8080:80"
     depends_on:

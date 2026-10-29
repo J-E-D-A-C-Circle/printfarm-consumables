@@ -3,26 +3,22 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { 
-  LayoutDashboard, 
-  Package, 
-  ArrowRightLeft, 
-  FileText, 
-  Settings, 
-  User,
+import {
+  LayoutDashboard,
+  FileSpreadsheet,
+  FileText,
+  Settings,
   PackageOpen,
   ChevronDown,
   ChevronRight,
-  X
+  X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Consumables (Intake)", href: "/consumables", icon: Package },
-  { name: "Categories (Dispatch)", href: "/categories", icon: PackageOpen },
-  { name: "Stock Movement", href: "/movements", icon: ArrowRightLeft },
-  { name: "Reports", href: "/reports", icon: FileText },
+  { name: "Consumables Return Sheet", href: "/categories", icon: FileSpreadsheet },
+  { name: "Reports & Analytics", href: "/reports", icon: FileText },
 ];
 
 interface SidebarProps {
@@ -37,22 +33,34 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [categoriesExpanded, setCategoriesExpanded] = useState<boolean>(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
-    async function loadCategories() {
+    let active = true;
+    async function loadSidebarData() {
       try {
-        const res = await fetch("/api/categories");
-        if (res.ok) {
-          const d = await res.json();
+        const [catRes, meRes] = await Promise.all([
+          fetch("/api/categories", { cache: "no-store" }),
+          fetch("/api/auth/me", { cache: "no-store" }),
+        ]);
+        if (active && catRes.ok) {
+          const d = await catRes.json();
           const names = (d.data || []).map((c: { name: string }) => c.name);
           setCategoriesList(names);
         }
+        if (active && meRes.ok) {
+          const me = await meRes.json();
+          setUserRole(me?.user?.role || null);
+        }
       } catch (err) {
-        console.error("Failed to load sidebar categories:", err);
+        console.error("Failed to load sidebar data:", err);
       }
     }
-    loadCategories();
-  }, []);
+    loadSidebarData();
+    return () => {
+      active = false;
+    };
+  }, [pathname]);
 
   return (
     <>
@@ -72,14 +80,14 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         )}
       >
         {/* Logo Area */}
-        <div className="flex h-16 items-center justify-between px-6 font-bold text-xl border-b border-white/10 bg-dvla-green-light shadow-md shrink-0">
+        <div className="flex h-16 items-center justify-between px-6 font-semibold text-xl border-b border-white/10 bg-dvla-green-light shadow-xs shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="h-9 w-9 rounded-md bg-white p-1 flex items-center justify-center shadow-xs shrink-0 border border-white/20">
               <img src="/oop.png" alt="DVLA Logo" className="h-full w-full object-contain" />
             </div>
             <div>
               <div className="text-sm leading-tight text-white tracking-wide">DVLA CONSUMABLES</div>
-              <div className="text-[10px] text-dvla-gold leading-tight">MANAGEMENT SYSTEM</div>
+              <div className="text-[10px] text-dvla-gold leading-tight">RETURN & CONSUMPTION</div>
             </div>
           </div>
           {onClose && (
@@ -97,7 +105,9 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
           {/* Main Nav */}
           <nav className="space-y-1">
             {navigation.map((item) => {
-              const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+              const isActive =
+                pathname === item.href ||
+                (item.href !== "/" && pathname.startsWith(item.href));
               return (
                 <Link
                   key={item.name}
@@ -105,9 +115,9 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
                   onClick={() => onClose && onClose()}
                   className={cn(
                     isActive
-                      ? "bg-dvla-green-light text-white font-semibold shadow-sm ring-1 ring-dvla-gold/40"
+                      ? "bg-dvla-green-light text-white font-medium shadow-xs ring-1 ring-dvla-gold/40"
                       : "text-white/80 hover:bg-white/10 hover:text-white",
-                    "group flex items-center px-3 py-2.5 text-sm font-medium rounded-md transition-all"
+                    "group flex items-center px-3 py-2.5 text-sm font-normal rounded-md transition-all"
                   )}
                 >
                   <item.icon
@@ -123,14 +133,14 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
             })}
           </nav>
 
-          {/* Collapsible Categories Nav */}
+          {/* Collapsible Consumable Types Nav */}
           <div className="flex-1 mt-4 flex flex-col overflow-hidden">
             <button
               onClick={() => setCategoriesExpanded(!categoriesExpanded)}
-              className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold text-dvla-gold uppercase tracking-wider hover:bg-white/5 rounded transition-colors group mb-1 shrink-0"
-              title={categoriesExpanded ? "Collapse categories" : "Expand categories"}
+              className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-dvla-gold uppercase tracking-wider hover:bg-white/5 rounded transition-colors group mb-1 shrink-0"
+              title={categoriesExpanded ? "Collapse consumable types" : "Expand consumable types"}
             >
-              <span>Categories</span>
+              <span>Consumable Types</span>
               <div className="p-0.5 rounded text-dvla-gold/80 group-hover:text-dvla-gold">
                 {categoriesExpanded ? (
                   <ChevronDown className="h-4 w-4 transition-transform duration-200" />
@@ -142,6 +152,27 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
 
             {categoriesExpanded && (
               <div className="space-y-1 flex-1 overflow-y-auto pr-2 custom-scrollbar pb-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                <Link
+                  href="/categories"
+                  onClick={() => onClose && onClose()}
+                  className={cn(
+                    pathname === "/categories" && !currentCategory
+                      ? "bg-white/20 text-white font-medium ring-1 ring-dvla-gold/30"
+                      : "text-white/70 hover:bg-white/10 hover:text-white",
+                    "group flex items-center px-3 py-1.5 text-sm font-normal rounded-md transition-all"
+                  )}
+                >
+                  <PackageOpen
+                    className={cn(
+                      pathname === "/categories" && !currentCategory
+                        ? "text-dvla-gold"
+                        : "text-white/40 group-hover:text-white",
+                      "mr-3 h-4 w-4 shrink-0 transition-colors"
+                    )}
+                  />
+                  All Consumable Types
+                </Link>
+
                 {categoriesList.map((category) => {
                   const isCategoryActive = currentCategory === category;
                   return (
@@ -151,15 +182,19 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
                       onClick={() => onClose && onClose()}
                       className={cn(
                         isCategoryActive
-                          ? "bg-white/20 text-white font-semibold ring-1 ring-dvla-gold/30"
+                          ? "bg-white/20 text-white font-medium ring-1 ring-dvla-gold/30"
                           : "text-white/70 hover:bg-white/10 hover:text-white",
-                        "group flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-all"
+                        "group flex items-center px-3 py-1.5 text-sm font-normal rounded-md transition-all"
                       )}
                     >
-                      <PackageOpen className={cn(
-                        isCategoryActive ? "text-dvla-gold" : "text-white/40 group-hover:text-white",
-                        "mr-3 h-4 w-4 shrink-0 transition-colors"
-                      )} />
+                      <PackageOpen
+                        className={cn(
+                          isCategoryActive
+                            ? "text-dvla-gold"
+                            : "text-white/40 group-hover:text-white",
+                          "mr-3 h-4 w-4 shrink-0 transition-colors"
+                        )}
+                      />
                       {category}
                     </Link>
                   );
@@ -168,20 +203,26 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
             )}
           </div>
 
-          {/* Bottom Nav */}
-          <div className="mt-auto space-y-1 pt-4 border-t border-white/10 shrink-0">
-            <Link
-              href="/settings"
-              onClick={() => onClose && onClose()}
-              className="group flex items-center px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white rounded-md transition-all"
-            >
-              <Settings className="mr-3 h-5 w-5 shrink-0 text-white/60 group-hover:text-white" />
-              Settings
-            </Link>
-          </div>
+          {/* Bottom Nav (Administrators Only) */}
+          {userRole === "Administrator" && (
+            <div className="mt-auto space-y-1 pt-4 border-t border-white/10 shrink-0">
+              <Link
+                href="/settings"
+                onClick={() => onClose && onClose()}
+                className={cn(
+                  pathname.startsWith("/settings")
+                    ? "bg-dvla-green-light text-white font-medium shadow-xs ring-1 ring-dvla-gold/40"
+                    : "text-white/80 hover:bg-white/10 hover:text-white",
+                  "group flex items-center px-3 py-2.5 text-sm font-normal rounded-md transition-all"
+                )}
+              >
+                <Settings className="mr-3 h-5 w-5 shrink-0 text-white/60 group-hover:text-white" />
+                Settings & Access Control
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </>
   );
 }
-

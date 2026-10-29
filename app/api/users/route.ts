@@ -4,6 +4,9 @@ import { getSessionFromRequest } from "@/lib/auth";
 import { logAudit, getClientIp } from "@/lib/audit";
 import { hashPassword } from "@/lib/passwords";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // ── GET /api/users ────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const session = await getSessionFromRequest(req);
@@ -31,11 +34,8 @@ export async function GET(req: NextRequest) {
 
   const rows = await query(
     `SELECT u.id, u.employee_id, u.first_name, u.last_name, u.email, u.phone,
-       u.role, u.status, u.must_change_password, u.last_login_at, u.created_at,
-       s.name AS station, d.name AS department
+            u.role, u.status, u.must_change_password, u.last_login_at, u.created_at
      FROM users u
-     LEFT JOIN stations    s ON s.id = u.station_id
-     LEFT JOIN departments d ON d.id = u.department_id
      ${where}
      ORDER BY u.first_name, u.last_name`,
     params
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { first_name, last_name, email, phone, password, role, station_id, department_id, employee_id } = body;
+  const { first_name, last_name, email, phone, password, role, employee_id } = body;
 
   if (!first_name || !last_name || !email || !password || !role) {
     return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
@@ -64,16 +64,16 @@ export async function POST(req: NextRequest) {
   const hash = await hashPassword(password);
 
   const result = await execute(
-    `INSERT INTO users (employee_id, first_name, last_name, email, phone, password_hash, role, station_id, department_id, must_change_password)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [employee_id || null, first_name, last_name, email, phone || null, hash, role, station_id || null, department_id || null]
+    `INSERT INTO users (employee_id, first_name, last_name, email, phone, password_hash, role, must_change_password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    [employee_id || null, first_name, last_name, email, phone || null, hash, role]
   );
 
   await logAudit({
     userId: session.id, userName: session.name,
     action: "CREATE_USER", tableName: "users",
     recordId: result.insertId,
-    newValues: { email, role, station_id, department_id },
+    newValues: { email, role },
     ipAddress: getClientIp(req.headers),
   });
 

@@ -5,14 +5,21 @@ import { NextRequest } from "next/server";
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "dvla-fallback-secret-change-in-production"
 );
-const COOKIE_NAME = "dvla_session";
+export const COOKIE_NAME = "dvla_session";
 const EXPIRES_IN = "8h";
+
+export type UserRole =
+  | "Administrator"
+  | "Supervisor"
+  | "Store Officer"
+  | "Station Officer"
+  | "Viewer";
 
 export interface SessionUser {
   id: number;
   email: string;
   name: string;
-  role: "Administrator" | "Supervisor" | "Store Officer" | "Station Officer" | "Viewer";
+  role: UserRole;
   stationId: number | null;
   stationName: string | null;
   departmentId: number | null;
@@ -28,10 +35,10 @@ export async function createSession(user: SessionUser): Promise<void> {
     .sign(JWT_SECRET);
 
   const cookieStore = await cookies();
-  const isHttps = process.env.NEXT_PUBLIC_APP_URL?.startsWith("https://") ?? false;
+  const isSecure = process.env.COOKIE_SECURE === "true";
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isHttps,
+    secure: isSecure,
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 8, // 8 hours
@@ -42,59 +49,17 @@ export async function createSession(user: SessionUser): Promise<void> {
 export async function getSession(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
-  if (!token) {
-    return {
-      id: 1,
-      email: "admin@dvla.gov.gh",
-      name: "System Administrator",
-      role: "Administrator",
-      stationId: 1,
-      stationName: "Head Office (Accra)",
-      departmentId: 1,
-      mustChangePassword: false,
-    };
-  }
-  const verified = await verifyToken(token);
-  return verified || {
-    id: 1,
-    email: "admin@dvla.gov.gh",
-    name: "System Administrator",
-    role: "Administrator",
-    stationId: 1,
-    stationName: "Head Office (Accra)",
-    departmentId: 1,
-    mustChangePassword: false,
-  };
+  if (!token) return null;
+  return verifyToken(token);
 }
 
-// ─── Read session from Route Handler / Middleware ────────────────────────────
+// ─── Read session from Route Handler / Proxy ────────────────────────────────
 export async function getSessionFromRequest(
   req: NextRequest
 ): Promise<SessionUser | null> {
   const token = req.cookies.get(COOKIE_NAME)?.value;
-  if (!token) {
-    return {
-      id: 1,
-      email: "admin@dvla.gov.gh",
-      name: "System Administrator",
-      role: "Administrator",
-      stationId: 1,
-      stationName: "Head Office (Accra)",
-      departmentId: 1,
-      mustChangePassword: false,
-    };
-  }
-  const verified = await verifyToken(token);
-  return verified || {
-    id: 1,
-    email: "admin@dvla.gov.gh",
-    name: "System Administrator",
-    role: "Administrator",
-    stationId: 1,
-    stationName: "Head Office (Accra)",
-    departmentId: 1,
-    mustChangePassword: false,
-  };
+  if (!token) return null;
+  return verifyToken(token);
 }
 
 // ─── Destroy session (logout) ────────────────────────────────────────────────
@@ -113,18 +78,59 @@ async function verifyToken(token: string): Promise<SessionUser | null> {
   }
 }
 
-// ─── Role helpers ────────────────────────────────────────────────────────────
-export const ROLES = {
+// ─── Role hierarchy & RBAC Permission Helpers ───────────────────────────────
+export const ROLES: Record<UserRole, number> = {
   Administrator: 5,
   Supervisor: 4,
   "Store Officer": 3,
   "Station Officer": 2,
   Viewer: 1,
-} as const;
+};
 
 export function hasMinRole(
-  user: SessionUser,
-  minRole: keyof typeof ROLES
+  user: SessionUser | null | undefined,
+  minRole: UserRole
 ): boolean {
-  return ROLES[user.role] >= ROLES[minRole];
+  if (!user || !user.role) return false;
+  return (ROLES[user.role] || 0) >= ROLES[minRole];
+}
+
+export function canManageUsers(role?: string | null): boolean {
+  return role === "Administrator";
+}
+
+export function canManageTypes(role?: string | null): boolean {
+  return (
+    role === "Administrator" ||
+    role === "Supervisor" ||
+    role === "Store Officer"
+  );
+}
+
+export function canCreateRequest(role?: string | null): boolean {
+  return Boolean(role && role !== "Viewer");
+}
+
+export function canIssueConsumable(role?: string | null): boolean {
+  return (
+    role === "Administrator" ||
+    role === "Supervisor" ||
+    role === "Store Officer"
+  );
+}
+
+export function canRecordConsumption(role?: string | null): boolean {
+  return Boolean(role && role !== "Viewer");
+}
+
+export function canEditRow(role?: string | null): boolean {
+  return (
+    role === "Administrator" ||
+    role === "Supervisor" ||
+    role === "Store Officer"
+  );
+}
+
+export function canDeleteRow(role?: string | null): boolean {
+  return role === "Administrator" || role === "Supervisor";
 }

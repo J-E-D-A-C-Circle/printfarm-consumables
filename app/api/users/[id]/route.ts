@@ -16,19 +16,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!existing) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
   const body = await req.json();
-  const { first_name, last_name, email, role, status, station_id, department_id } = body;
+  const { first_name, last_name, email, phone, role, status } = body;
 
   await execute(
     `UPDATE users SET
        first_name = COALESCE(?, first_name),
-       last_name = COALESCE(?, last_name),
-       email = COALESCE(?, email),
-       role = COALESCE(?, role),
-       status = COALESCE(?, status),
-       station_id = COALESCE(?, station_id),
-       department_id = COALESCE(?, department_id)
+       last_name  = COALESCE(?, last_name),
+       email      = COALESCE(?, email),
+       phone      = COALESCE(?, phone),
+       role       = COALESCE(?, role),
+       status     = COALESCE(?, status)
      WHERE id = ?`,
-    [first_name || null, last_name || null, email || null, role || null, status || null, station_id || null, department_id || null, id]
+    [first_name || null, last_name || null, email || null, phone || null, role || null, status || null, id]
   );
 
   await logAudit({
