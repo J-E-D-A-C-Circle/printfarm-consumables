@@ -25,7 +25,21 @@ INSERT IGNORE INTO users (first_name, last_name, email, phone, password_hash, ro
 ('Gideon',  'Odoom',         'viewer@dvla.gov.gh',     '030-0000005', '$2b$12$/MxzEYz.3Sq/n6TWF4sRPeHNRoTBrTIPFv6lxOFzZgWN/bdauGR9q', 'Viewer',          'Active', 0);
 
 -- ------------------------------------------------------------
--- 3. FULL EXCEL CONSUMABLES RETURN SHEET RECORDS (Rows 6-47)
+-- 3. INITIAL CONSUMABLE STOCKS (Opening & Restock Batches)
+-- ------------------------------------------------------------
+INSERT IGNORE INTO consumable_stocks
+  (reference_number, date_received, category_id, consumable_name, quantity_added, supplier, batch_number, received_by, remarks)
+VALUES
+  ('STK-2026-0001', '2026-01-02', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        150, 'DVLA Central Store', 'BATCH-HP-2601',    'MR. RICHARD ANAFO', 'Q1 Opening Stock — Holo Patch'),
+  ('STK-2026-0002', '2026-01-02', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      200, 'DVLA Central Store', 'BATCH-CR-2601',    'MR. RICHARD ANAFO', 'Q1 Opening Stock — Color Ribbon'),
+  ('STK-2026-0003', '2026-01-03', (SELECT id FROM categories WHERE name = 'MCC660 Holo Patch' LIMIT 1), 'MCC660 Holo Patch', 120, 'DVLA Central Store', 'BATCH-MCCHP-2601', 'MR. RICHARD ANAFO', 'Q1 Opening Stock — MCC660 Holo Patch'),
+  ('STK-2026-0004', '2026-01-03', (SELECT id FROM categories WHERE name = 'MCC660 Clear' LIMIT 1),      'MCC660 Clear',      80,  'DVLA Central Store', 'BATCH-MCCCL-2601', 'MR. RICHARD ANAFO', 'Q1 Opening Stock — MCC660 Clear'),
+  ('STK-2026-0005', '2026-01-03', (SELECT id FROM categories WHERE name = 'Black' LIMIT 1),             'Black',             60,  'DVLA Central Store', 'BATCH-BLK-2601',   'MR. RICHARD ANAFO', 'Q1 Opening Stock — Black Ribbon'),
+  ('STK-2026-0006', '2026-04-01', (SELECT id FROM categories WHERE name = 'Holo Patch' LIMIT 1),        'Holo Patch',        100, 'DVLA Procurement',   'BATCH-HP-2604',    'MR. RICHARD ANAFO', 'Q2 Restock Delivery'),
+  ('STK-2026-0007', '2026-04-01', (SELECT id FROM categories WHERE name = 'Color Ribbon' LIMIT 1),      'Color Ribbon',      120, 'DVLA Procurement',   'BATCH-CR-2604',    'MR. RICHARD ANAFO', 'Q2 Restock Delivery');
+
+-- ------------------------------------------------------------
+-- 4. FULL EXCEL CONSUMABLES RETURN SHEET RECORDS (Rows 6-47)
 -- ------------------------------------------------------------
 INSERT IGNORE INTO consumable_requests
   (reference_number, date_requested, category_id, consumable_name, quantity_requested, quantity_issued, issued_by, requested_by, received_by, date_returned, total_consumption, status)
@@ -78,6 +92,7 @@ VALUES
 INSERT IGNORE INTO system_migrations (migration_key) VALUES
   ('return_sheet_v1'),
   ('rbac_default_users_v1'),
-  ('cleanup_unused_tables_and_full_seed_v2');
+  ('cleanup_unused_tables_and_full_seed_v2'),
+  ('consumable_stocks_v1');
 
 SET foreign_key_checks = 1;

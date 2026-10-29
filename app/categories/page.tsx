@@ -17,9 +17,11 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { gooeyToast } from "@/components/ui/gooey-toast";
 import {
   Search,
   Download,
@@ -97,12 +99,14 @@ function CategoriesContent() {
   });
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteTargetRecord, setDeleteTargetRecord] = useState<ReturnSheetRecord | null>(null);
 
   // Manage Consumable Types Modal State
   const [manageTypesOpen, setManageTypesOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [addingCat, setAddingCat] = useState(false);
   const [deletingCatId, setDeletingCatId] = useState<number | null>(null);
+  const [deleteTargetCategory, setDeleteTargetCategory] = useState<Category | null>(null);
   const [typeMsg, setTypeMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
@@ -171,19 +175,29 @@ function CategoriesContent() {
     return { totalReq, totalIss, totalCons };
   }, [records]);
 
-  const handleDeleteRecord = async (rec: ReturnSheetRecord) => {
+  const handleDeleteRecord = (rec: ReturnSheetRecord) => {
+    setDeleteTargetRecord(rec);
+  };
+
+  const confirmDeleteRecord = async () => {
+    if (!deleteTargetRecord) return;
+    const rec = deleteTargetRecord;
     const name = rec.consumable_name || rec.category || "Consumable";
-    if (!confirm(`Delete record #${rec.reference_number} (${name} requested by ${rec.requested_by})?`)) {
-      return;
-    }
     setDeletingId(rec.id);
     try {
       const res = await fetch(`/api/issues?id=${rec.id}`, { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to delete record.");
+      setDeleteTargetRecord(null);
+      gooeyToast.success("Return Record Deleted", {
+        description: `Record #${rec.reference_number} (${name} requested by ${rec.requested_by}) has been removed from the Return Sheet.`,
+      });
       await loadRecords();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error deleting record.");
+      const message = err instanceof Error ? err.message : "Error deleting record.";
+      gooeyToast.error("Delete Failed", {
+        description: message,
+      });
     } finally {
       setDeletingId(null);
     }
@@ -207,20 +221,32 @@ function CategoriesContent() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to add consumable type.");
       setTypeMsg({ type: "success", text: `Consumable type "${trimmed}" added.` });
+      gooeyToast.success("Consumable Type Added", {
+        description: `"${trimmed}" is now available in the Consumables Return Sheet and Stock Registry.`,
+      });
       setNewCatName("");
       await loadRecords();
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error adding consumable type.";
       setTypeMsg({
         type: "error",
-        text: err instanceof Error ? err.message : "Error adding consumable type.",
+        text: message,
+      });
+      gooeyToast.error("Failed to Add Type", {
+        description: message,
       });
     } finally {
       setAddingCat(false);
     }
   };
 
-  const handleDeleteCategory = async (cat: Category) => {
-    if (!confirm(`Remove consumable type "${cat.name}"?`)) return;
+  const handleDeleteCategory = (cat: Category) => {
+    setDeleteTargetCategory(cat);
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!deleteTargetCategory) return;
+    const cat = deleteTargetCategory;
     setTypeMsg(null);
     setDeletingCatId(cat.id);
     try {
@@ -231,12 +257,20 @@ function CategoriesContent() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Cannot remove "${cat.name}".`);
+      setDeleteTargetCategory(null);
       setTypeMsg({ type: "success", text: `Consumable type "${cat.name}" removed.` });
+      gooeyToast.success("Consumable Type Removed", {
+        description: `"${cat.name}" has been removed from the system.`,
+      });
       await loadRecords();
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : `Cannot remove "${cat.name}".`;
       setTypeMsg({
         type: "error",
-        text: err instanceof Error ? err.message : `Cannot remove "${cat.name}".`,
+        text: message,
+      });
+      gooeyToast.error("Cannot Remove Type", {
+        description: message,
       });
     } finally {
       setDeletingCatId(null);
@@ -245,7 +279,9 @@ function CategoriesContent() {
 
   const handleExportExcel = () => {
     if (records.length === 0) {
-      alert("No records available to export.");
+      gooeyToast.warning("No Records to Export", {
+        description: "There are no return sheet records matching your current filters to export.",
+      });
       return;
     }
 
@@ -393,6 +429,9 @@ function CategoriesContent() {
       wb,
       `DVLA_Consumables_Return_Sheet_${new Date().toISOString().split("T")[0]}.xlsx`
     );
+    gooeyToast.success("Excel Sheet Exported", {
+      description: `Exported ${records.length} return sheet records to DVLA_Consumables_Return_Sheet.xlsx.`,
+    });
   };
 
   return (
@@ -982,6 +1021,144 @@ function CategoriesContent() {
                 ))}
               </div>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL: DELETE RETURN SHEET RECORD CONFIRMATION */}
+        <Dialog
+          open={!!deleteTargetRecord}
+          onOpenChange={(open) => {
+            if (!open && !deletingId) setDeleteTargetRecord(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200 p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-semibold text-slate-900">
+                    Delete Return Sheet Record
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    Are you sure you want to permanently delete this return sheet record?
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            {deleteTargetRecord && (
+              <div className="my-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Reference No.</span>
+                  <span className="font-mono font-medium text-slate-800">
+                    #{deleteTargetRecord.reference_number}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Consumable Type</span>
+                  <span className="font-medium text-slate-900">
+                    {deleteTargetRecord.consumable_name || deleteTargetRecord.category}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Requested By</span>
+                  <span className="font-medium text-slate-700">
+                    {deleteTargetRecord.requested_by || "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Qty Requested / Issued</span>
+                  <span className="font-medium text-blue-700">
+                    {deleteTargetRecord.quantity_requested ?? 0} req /{" "}
+                    {deleteTargetRecord.quantity_issued ?? "Pending"} iss
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!!deletingId}
+                onClick={() => setDeleteTargetRecord(null)}
+                className="h-9 text-xs font-normal border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!!deletingId}
+                onClick={confirmDeleteRecord}
+                className="h-9 text-xs font-medium bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                {deletingId ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Record
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL: DELETE CONSUMABLE TYPE CONFIRMATION */}
+        <Dialog
+          open={!!deleteTargetCategory}
+          onOpenChange={(open) => {
+            if (!open && !deletingCatId) setDeleteTargetCategory(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200 p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-semibold text-slate-900">
+                    Remove Consumable Type
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    Remove &ldquo;{deleteTargetCategory?.name}&rdquo; from active consumable types?
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <DialogFooter className="gap-2 sm:gap-2 pt-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!!deletingCatId}
+                onClick={() => setDeleteTargetCategory(null)}
+                className="h-9 text-xs font-normal border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!!deletingCatId}
+                onClick={confirmDeleteCategory}
+                className="h-9 text-xs font-medium bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                {deletingCatId ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Removing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Remove Type
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

@@ -68,7 +68,30 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
--- 4. CONSUMABLE REQUESTS & PRODUCTION RETURN SHEET
+-- 4. CONSUMABLE STOCKS (Stock In / Inventory Additions)
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS consumable_stocks (
+  id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  reference_number VARCHAR(50) NOT NULL,
+  date_received    DATE NOT NULL,
+  category_id      INT UNSIGNED DEFAULT NULL,
+  consumable_name  VARCHAR(150) NOT NULL,
+  quantity_added   INT NOT NULL DEFAULT 0,
+  supplier         VARCHAR(255) DEFAULT NULL,
+  batch_number     VARCHAR(100) DEFAULT NULL,
+  received_by      VARCHAR(255) NOT NULL,
+  remarks          TEXT DEFAULT NULL,
+  created_by       INT UNSIGNED DEFAULT NULL,
+  updated_by       INT UNSIGNED DEFAULT NULL,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_stock_reference (reference_number),
+  KEY idx_stock_date (date_received),
+  KEY idx_stock_consumable (consumable_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 5. CONSUMABLE REQUESTS & PRODUCTION RETURN SHEET
 -- Flow: Request Quantity -> Quantity Issued (Exact, More, or Less) -> Production Result (Date Returned & Total Consumption)
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS consumable_requests (
@@ -97,7 +120,7 @@ CREATE TABLE IF NOT EXISTS consumable_requests (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
--- 5. AUDIT LOG
+-- 6. AUDIT LOG
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (
   id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

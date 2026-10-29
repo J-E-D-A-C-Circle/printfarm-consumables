@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PackageOpen, UserPlus, Users, Search, Edit2, Trash2, UserX, UserCheck, AlertCircle, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { gooeyToast } from "@/components/ui/gooey-toast";
 
 interface DbUser {
   id: number;
@@ -58,6 +59,10 @@ export default function SettingsPage() {
   const [editingUser, setEditingUser] = useState<DbUser | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
+  const [deleteTargetUser, setDeleteTargetUser] = useState<DbUser | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
+  const [deleteTargetCat, setDeleteTargetCat] = useState<CategoryItem | null>(null);
+
   const loadData = useCallback(async () => {
     setLoadingUsers(true);
     try {
@@ -91,7 +96,9 @@ export default function SettingsPage() {
     setCategoryMsg(null);
 
     if (categories.some((c) => c.name.toLowerCase() === trimmed.toLowerCase())) {
-      setCategoryMsg({ type: "error", text: `Category "${trimmed}" already exists.` });
+      const msg = `Category "${trimmed}" already exists.`;
+      setCategoryMsg({ type: "error", text: msg });
+      gooeyToast.warning("Type Already Exists", { description: msg });
       return;
     }
 
@@ -111,17 +118,27 @@ export default function SettingsPage() {
       if (!res.ok) throw new Error(data.error || "Failed to create category.");
 
       setCategoryMsg({ type: "success", text: `Consumable type "${trimmed}" created.` });
+      gooeyToast.success("Consumable Type Created", {
+        description: `"${trimmed}" is now available in the Consumables Return Sheet and Stock Registry.`,
+      });
       setNewCategoryName("");
       await loadData();
     } catch (err: unknown) {
-      setCategoryMsg({ type: "error", text: err instanceof Error ? err.message : "Failed to add category." });
+      const message = err instanceof Error ? err.message : "Failed to add category.";
+      setCategoryMsg({ type: "error", text: message });
+      gooeyToast.error("Failed to Add Type", { description: message });
     } finally {
       setAddingCategory(false);
     }
   };
 
-  const handleDeleteCategory = async (cat: CategoryItem) => {
-    if (!confirm(`Are you sure you want to delete consumable type "${cat.name}"?`)) return;
+  const handleDeleteCategory = (cat: CategoryItem) => {
+    setDeleteTargetCat(cat);
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!deleteTargetCat) return;
+    const cat = deleteTargetCat;
     setCategoryMsg(null);
     setDeletingCatId(cat.id);
 
@@ -137,13 +154,19 @@ export default function SettingsPage() {
         throw new Error(data.error || `Cannot delete "${cat.name}".`);
       }
 
+      setDeleteTargetCat(null);
       setCategoryMsg({ type: "success", text: `Consumable type "${cat.name}" deleted.` });
+      gooeyToast.success("Consumable Type Deleted", {
+        description: `"${cat.name}" has been removed from the system.`,
+      });
       await loadData();
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : `Cannot delete "${cat.name}".`;
       setCategoryMsg({
         type: "error",
-        text: err instanceof Error ? err.message : `Cannot delete "${cat.name}".`,
+        text: message,
       });
+      gooeyToast.error("Cannot Delete Type", { description: message });
     } finally {
       setDeletingCatId(null);
     }
@@ -154,7 +177,9 @@ export default function SettingsPage() {
     setUserMsg(null);
 
     if (!firstName.trim() || !lastName.trim() || !email.trim()) {
-      setUserMsg({ type: "error", text: "First name, last name, and email are required." });
+      const msg = "First name, last name, and email are required.";
+      setUserMsg({ type: "error", text: msg });
+      gooeyToast.warning("Missing Fields", { description: msg });
       return;
     }
 
@@ -176,14 +201,20 @@ export default function SettingsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create user account.");
 
-      setUserMsg({ type: "success", text: `User account for ${firstName} ${lastName} created.` });
+      const fullName = `${firstName.trim()} ${lastName.trim()}`;
+      setUserMsg({ type: "success", text: `User account for ${fullName} created.` });
+      gooeyToast.success("User Account Created", {
+        description: `Provisioned ${role} account for ${fullName} (${email.trim()}).`,
+      });
       setFirstName("");
       setLastName("");
       setEmail("");
       setPhone("");
       await loadData();
     } catch (err: unknown) {
-      setUserMsg({ type: "error", text: err instanceof Error ? err.message : "Error creating user." });
+      const message = err instanceof Error ? err.message : "Error creating user.";
+      setUserMsg({ type: "error", text: message });
+      gooeyToast.error("Account Creation Failed", { description: message });
     } finally {
       setSubmittingUser(false);
     }
@@ -198,27 +229,50 @@ export default function SettingsPage() {
         body: JSON.stringify({ status: nextStatus }),
       });
       if (res.ok) {
+        gooeyToast.info(`Account ${nextStatus}`, {
+          description: `${user.first_name} ${user.last_name}'s account status is now ${nextStatus}.`,
+        });
         await loadData();
       } else {
-        alert("Failed to update user status.");
+        gooeyToast.error("Status Update Failed", {
+          description: "Failed to update user account status.",
+        });
       }
     } catch {
-      alert("Error updating status.");
+      gooeyToast.error("Status Update Failed", {
+        description: "Network error while updating user status.",
+      });
     }
   };
 
-  const handleDeleteUser = async (user: DbUser) => {
-    if (!confirm(`Are you sure you want to delete account for "${user.first_name} ${user.last_name}"?`)) return;
+  const handleDeleteUser = (user: DbUser) => {
+    setDeleteTargetUser(user);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deleteTargetUser) return;
+    const user = deleteTargetUser;
+    setDeletingUserId(user.id);
     try {
       const res = await fetch(`/api/users/${user.id}`, { method: "DELETE" });
       if (res.ok) {
+        setDeleteTargetUser(null);
+        gooeyToast.success("User Account Deleted", {
+          description: `Removed account for ${user.first_name} ${user.last_name} (${user.email}).`,
+        });
         await loadData();
       } else {
         const data = await res.json();
-        alert(data.error || "Failed to delete user.");
+        gooeyToast.error("Delete Failed", {
+          description: data.error || "Failed to delete user account.",
+        });
       }
     } catch {
-      alert("Error deleting user.");
+      gooeyToast.error("Delete Failed", {
+        description: "Error deleting user account.",
+      });
+    } finally {
+      setDeletingUserId(null);
     }
   };
 
@@ -244,13 +298,20 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setEditOpen(false);
+        gooeyToast.success("User Account Updated", {
+          description: `Saved changes for ${editingUser.first_name} ${editingUser.last_name} (${editingUser.role}).`,
+        });
         await loadData();
       } else {
         const d = await res.json();
-        alert(d.error || "Failed to save user updates.");
+        gooeyToast.error("Update Failed", {
+          description: d.error || "Failed to save user updates.",
+        });
       }
     } catch {
-      alert("Error updating user.");
+      gooeyToast.error("Update Failed", {
+        description: "Error updating user account.",
+      });
     }
   };
 
@@ -760,6 +821,137 @@ export default function SettingsPage() {
             </DialogContent>
           </Dialog>
         )}
+
+        {/* MODAL: DELETE USER ACCOUNT CONFIRMATION */}
+        <Dialog
+          open={!!deleteTargetUser}
+          onOpenChange={(open) => {
+            if (!open && !deletingUserId) setDeleteTargetUser(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200 p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-semibold text-slate-900">
+                    Delete User Account
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    Are you sure you want to permanently remove this user account?
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            {deleteTargetUser && (
+              <div className="my-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Full Name</span>
+                  <span className="font-medium text-slate-900">
+                    {deleteTargetUser.first_name} {deleteTargetUser.last_name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Email Address</span>
+                  <span className="font-medium text-slate-700">
+                    {deleteTargetUser.email}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Assigned Role</span>
+                  <span className="font-medium text-slate-800">
+                    {deleteTargetUser.role}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!!deletingUserId}
+                onClick={() => setDeleteTargetUser(null)}
+                className="h-9 text-xs font-normal border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!!deletingUserId}
+                onClick={confirmDeleteUser}
+                className="h-9 text-xs font-medium bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                {deletingUserId ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Account
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL: DELETE CONSUMABLE TYPE CONFIRMATION */}
+        <Dialog
+          open={!!deleteTargetCat}
+          onOpenChange={(open) => {
+            if (!open && !deletingCatId) setDeleteTargetCat(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200 p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-semibold text-slate-900">
+                    Delete Consumable Type
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    Are you sure you want to delete consumable type &ldquo;{deleteTargetCat?.name}&rdquo;?
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <DialogFooter className="gap-2 sm:gap-2 pt-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!!deletingCatId}
+                onClick={() => setDeleteTargetCat(null)}
+                className="h-9 text-xs font-normal border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!!deletingCatId}
+                onClick={confirmDeleteCategory}
+                className="h-9 text-xs font-medium bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                {deletingCatId ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Delete Type
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   );

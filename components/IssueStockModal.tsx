@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { gooeyToast } from "@/components/ui/gooey-toast";
 
 interface Category {
   id: number;
@@ -227,21 +228,36 @@ export function IssueStockModal({
         throw new Error(data.error || "Failed to save record.");
       }
 
-      const modeLabel =
+      const toastTitle =
         entryMode === "request"
-          ? "Consumable request logged."
+          ? "Consumable Request Logged"
           : entryMode === "issue"
-          ? `Consumable issued (${issNum} issued vs ${reqNum} requested).`
-          : `Return sheet record saved (Total Consumption: ${Number(totalConsumption).toLocaleString()}).`;
+          ? "Consumable Issued"
+          : "Return Record Saved";
 
-      setSuccess(modeLabel);
+      const toastDescription =
+        entryMode === "request"
+          ? `Request #${reference} for ${reqNum} ${selectedCategoryName} requested by ${requestedBy.trim().toUpperCase()} has been logged.`
+          : entryMode === "issue"
+          ? `Issued ${issNum} ${selectedCategoryName} (vs ${reqNum} requested) to ${receivedBy.trim().toUpperCase()} under #${reference}.`
+          : `Saved full return entry #${reference} for ${selectedCategoryName} with Total Consumption of ${Number(totalConsumption).toLocaleString()}.`;
+
+      setSuccess(toastDescription);
+      gooeyToast.success(toastTitle, {
+        description: toastDescription,
+      });
+
       setTimeout(() => {
         setOpen(false);
         router.refresh();
         if (onSuccess) onSuccess();
-      }, 900);
+      }, 600);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Error saving record.");
+      const message = err instanceof Error ? err.message : "Error saving record.";
+      setError(message);
+      gooeyToast.error("Failed to Save Entry", {
+        description: message,
+      });
     } finally {
       setSubmitting(false);
     }

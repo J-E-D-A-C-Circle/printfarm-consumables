@@ -9,6 +9,7 @@ import {
   FileText,
   Settings,
   PackageOpen,
+  Boxes,
   ChevronDown,
   ChevronRight,
   LogOut,
@@ -19,6 +20,7 @@ import { useEffect, useState } from "react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Consumable Stocks", href: "/stocks", icon: Boxes },
   { name: "Consumables Return Sheet", href: "/categories", icon: FileSpreadsheet },
   { name: "Reports & Analytics", href: "/reports", icon: FileText },
 ];

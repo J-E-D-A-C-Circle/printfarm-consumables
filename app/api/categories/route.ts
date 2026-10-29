@@ -20,7 +20,9 @@ export async function GET(req: NextRequest) {
        COALESCE(r.request_count, 0) AS request_count,
        COALESCE(r.total_requested, 0) AS total_requested,
        COALESCE(r.total_issued, 0) AS total_issued,
-       COALESCE(r.total_consumption, 0) AS total_consumption
+       COALESCE(r.total_consumption, 0) AS total_consumption,
+       COALESCE(s.total_stock_added, 0) AS total_stock_added,
+       (COALESCE(s.total_stock_added, 0) - COALESCE(r.total_issued, 0)) AS available_stock
      FROM categories cat
      LEFT JOIN (
        SELECT 
@@ -32,6 +34,13 @@ export async function GET(req: NextRequest) {
        FROM consumable_requests
        GROUP BY consumable_name
      ) r ON LOWER(r.consumable_name) = LOWER(cat.name)
+     LEFT JOIN (
+       SELECT
+         consumable_name,
+         COALESCE(SUM(quantity_added), 0) AS total_stock_added
+       FROM consumable_stocks
+       GROUP BY consumable_name
+     ) s ON LOWER(s.consumable_name) = LOWER(cat.name)
      WHERE cat.is_active = 1 
      ORDER BY
        CASE LOWER(cat.name)

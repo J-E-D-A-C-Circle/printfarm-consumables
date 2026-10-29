@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useState, useEffect } from "react";
+import { gooeyToast } from "@/components/ui/gooey-toast";
 import {
   FileSignature,
   Save,
@@ -253,10 +254,28 @@ export function ReconciliationModal({
         throw new Error(data.error || "Failed to update record.");
       }
 
+      if (activeTab === "issue") {
+        gooeyToast.success("Consumable Issued", {
+          description: `Issued ${parsedIss} ${consumableName} to ${receivedBy.trim().toUpperCase()} for request #${issueRecord.reference_number}.`,
+        });
+      } else if (activeTab === "return") {
+        gooeyToast.success("Total Consumption Recorded", {
+          description: `Recorded ${Number(totalConsumption).toLocaleString()} total consumption for ${consumableName} (#${issueRecord.reference_number}).`,
+        });
+      } else {
+        gooeyToast.success("Return Sheet Row Updated", {
+          description: `Updated return sheet record #${issueRecord.reference_number} (${consumableName}).`,
+        });
+      }
+
       setOpen(false);
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Error saving changes.");
+      const message = err instanceof Error ? err.message : "Error saving changes.";
+      setError(message);
+      gooeyToast.error("Update Failed", {
+        description: message,
+      });
     } finally {
       setSubmitting(false);
     }

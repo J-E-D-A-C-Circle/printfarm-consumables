@@ -53,6 +53,7 @@ function TopHeaderContent({ onMobileToggle }: TopHeaderProps) {
 
   const getTitle = () => {
     if (pathname === "/") return "Consumables Request & Production Dashboard";
+    if (pathname.startsWith("/stocks")) return "Consumable Stocks & Store Balances";
     if (pathname.startsWith("/categories")) {
       return cat ? `Consumables Return Sheet — ${cat}` : "Consumables Return Sheet";
     }

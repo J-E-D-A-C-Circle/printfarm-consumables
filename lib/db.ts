@@ -143,6 +143,28 @@ async function initReturnSheetSchema(): Promise<void> {
     `);
 
     await conn.query(`
+      CREATE TABLE IF NOT EXISTS consumable_stocks (
+        id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        reference_number VARCHAR(50) NOT NULL,
+        date_received    DATE NOT NULL,
+        category_id      INT UNSIGNED DEFAULT NULL,
+        consumable_name  VARCHAR(150) NOT NULL,
+        quantity_added   INT NOT NULL DEFAULT 0,
+        supplier         VARCHAR(255) DEFAULT NULL,
+        batch_number     VARCHAR(100) DEFAULT NULL,
+        received_by      VARCHAR(255) NOT NULL,
+        remarks          TEXT DEFAULT NULL,
+        created_by       INT UNSIGNED DEFAULT NULL,
+        updated_by       INT UNSIGNED DEFAULT NULL,
+        created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_stock_reference (reference_number),
+        KEY idx_stock_date (date_received),
+        KEY idx_stock_consumable (consumable_name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await conn.query(`
       CREATE TABLE IF NOT EXISTS consumable_requests (
         id                 INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         reference_number   VARCHAR(50) NOT NULL,
@@ -351,6 +373,44 @@ async function initReturnSheetSchema(): Promise<void> {
 
       await conn.query(
         `INSERT IGNORE INTO system_migrations (migration_key) VALUES ('return_sheet_v1'), ('rbac_default_users_v1'), ('cleanup_unused_tables_and_full_seed_v2')`
+      );
+    }
+
+    // Seed initial consumable_stocks batches if not yet seeded
+    const [stockMig] = await conn.query<mysql.RowDataPacket[]>(
+      `SELECT migration_key FROM system_migrations WHERE migration_key = 'consumable_stocks_v1'`
+    );
+    if (stockMig.length === 0) {
+      const [catRows] = await conn.query<mysql.RowDataPacket[]>(
+        `SELECT id, name FROM categories WHERE is_active = 1`
+      );
+      const catMap = new Map<string, number>();
+      for (const r of catRows) {
+        catMap.set(String(r.name).toLowerCase(), Number(r.id));
+      }
+
+      const initialStocks = [
+        { ref: "STK-2026-0001", date_received: "2026-01-02", consumable_name: "Holo Patch", quantity_added: 150, supplier: "DVLA Central Store", batch_number: "BATCH-HP-2601", received_by: "MR. RICHARD ANAFO", remarks: "Q1 Opening Stock — Holo Patch" },
+        { ref: "STK-2026-0002", date_received: "2026-01-02", consumable_name: "Color Ribbon", quantity_added: 200, supplier: "DVLA Central Store", batch_number: "BATCH-CR-2601", received_by: "MR. RICHARD ANAFO", remarks: "Q1 Opening Stock — Color Ribbon" },
+        { ref: "STK-2026-0003", date_received: "2026-01-03", consumable_name: "MCC660 Holo Patch", quantity_added: 120, supplier: "DVLA Central Store", batch_number: "BATCH-MCCHP-2601", received_by: "MR. RICHARD ANAFO", remarks: "Q1 Opening Stock — MCC660 Holo Patch" },
+        { ref: "STK-2026-0004", date_received: "2026-01-03", consumable_name: "MCC660 Clear", quantity_added: 80, supplier: "DVLA Central Store", batch_number: "BATCH-MCCCL-2601", received_by: "MR. RICHARD ANAFO", remarks: "Q1 Opening Stock — MCC660 Clear" },
+        { ref: "STK-2026-0005", date_received: "2026-01-03", consumable_name: "Black", quantity_added: 60, supplier: "DVLA Central Store", batch_number: "BATCH-BLK-2601", received_by: "MR. RICHARD ANAFO", remarks: "Q1 Opening Stock — Black Ribbon" },
+        { ref: "STK-2026-0006", date_received: "2026-04-01", consumable_name: "Holo Patch", quantity_added: 100, supplier: "DVLA Procurement", batch_number: "BATCH-HP-2604", received_by: "MR. RICHARD ANAFO", remarks: "Q2 Restock Delivery" },
+        { ref: "STK-2026-0007", date_received: "2026-04-01", consumable_name: "Color Ribbon", quantity_added: 120, supplier: "DVLA Procurement", batch_number: "BATCH-CR-2604", received_by: "MR. RICHARD ANAFO", remarks: "Q2 Restock Delivery" },
+      ];
+
+      for (const s of initialStocks) {
+        const catId = catMap.get(s.consumable_name.toLowerCase()) ?? null;
+        await conn.query(
+          `INSERT IGNORE INTO consumable_stocks
+            (reference_number, date_received, category_id, consumable_name, quantity_added, supplier, batch_number, received_by, remarks)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [s.ref, s.date_received, catId, s.consumable_name, s.quantity_added, s.supplier, s.batch_number, s.received_by, s.remarks]
+        );
+      }
+
+      await conn.query(
+        `INSERT IGNORE INTO system_migrations (migration_key) VALUES ('consumable_stocks_v1')`
       );
     }
   } catch (err) {
