@@ -8,6 +8,10 @@ const ADMIN_ONLY_PATHS = ["/settings", "/api/users"];
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  if (pathname === "/favicon.ico") {
+    return NextResponse.rewrite(new URL("/oop.png", request.url));
+  }
+
   // Allow static assets & Next.js internals
   if (
     pathname.startsWith("/_next") ||

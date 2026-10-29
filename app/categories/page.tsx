@@ -36,6 +36,8 @@ import {
   Package,
   CheckSquare,
   Clock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { IssueStockModal } from "@/components/IssueStockModal";
 import { ReconciliationModal, ReturnSheetRecord } from "@/components/ReconciliationModal";
@@ -80,7 +82,7 @@ function CategoriesContent() {
   const [selectedStatus, setSelectedStatus] = useState("all");
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(20);
 
   const [records, setRecords] = useState<ReturnSheetRecord[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -144,8 +146,16 @@ function CategoriesContent() {
   }, [searchTerm, selectedCategory, selectedStatus, currentPage, pageSize]);
 
   useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory, selectedStatus]);
+
+  useEffect(() => {
     loadRecords();
   }, [loadRecords]);
+
+  const totalPages = Math.max(1, Math.ceil((summary.total_requests || 0) / pageSize));
+  const startRow = summary.total_requests === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endRow = Math.min(currentPage * pageSize, summary.total_requests || 0);
 
   const tableTotals = useMemo(() => {
     let totalReq = 0;
@@ -789,32 +799,109 @@ function CategoriesContent() {
               </tbody>
 
               {records.length > 0 && (
-                <tfoot>
-                  <tr className="bg-slate-50 border-t border-slate-200 font-medium text-slate-800">
-                    <td className="py-3 px-4 border-r border-slate-200">
-                      Total
+                <tfoot className="sticky bottom-0 z-10 bg-slate-50 shadow-[0_-1px_0_0_rgba(226,232,240,1)]">
+                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-medium text-slate-800">
+                    <td className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
+                      Total (All Pages)
                     </td>
-                    <td className="py-3 px-4 border-r border-slate-200 text-slate-500 font-normal">
-                      {records.length} records
+                    <td className="py-3 px-4 border-r border-slate-200 text-slate-500 font-normal whitespace-nowrap">
+                      {summary.total_requests.toLocaleString()} records
                     </td>
                     <td className="py-3 px-4 text-center border-r border-slate-200">
-                      {tableTotals.totalReq.toLocaleString()}
+                      {summary.total_requested_qty.toLocaleString()}
                     </td>
                     <td className="py-3 px-4 text-center border-r border-slate-200 text-blue-700">
-                      {tableTotals.totalIss.toLocaleString()}
+                      {summary.total_issued_qty.toLocaleString()}
                     </td>
                     <td colSpan={3} className="border-r border-slate-200" />
-                    <td className="py-3 px-4 text-center border-r border-slate-200 text-slate-500 font-normal">
+                    <td className="py-3 px-4 text-center border-r border-slate-200 text-slate-500 font-normal whitespace-nowrap">
                       Total Consumption
                     </td>
                     <td className="py-3 px-4 text-right border-r border-slate-200 text-emerald-700">
-                      {tableTotals.totalCons.toLocaleString()}
+                      {summary.total_consumption.toLocaleString()}
                     </td>
                     <td />
                   </tr>
                 </tfoot>
               )}
             </table>
+          </div>
+
+          {/* Pagination & Rows Per Page Bar */}
+          <div className="px-4 py-3 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500">Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="h-8 rounded-md border border-slate-200 bg-slate-50/70 px-2.5 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-dvla-green/20"
+                >
+                  {[20, 30, 50, 70].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <span className="text-slate-400">|</span>
+              <span>
+                Showing <span className="font-medium text-slate-800">{startRow}</span>–
+                <span className="font-medium text-slate-800">{endRow}</span> of{" "}
+                <span className="font-medium text-slate-800">{summary.total_requests}</span> records
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || loading}
+                className="h-8 px-2.5 text-xs font-normal border-slate-200 gap-1"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Prev
+              </Button>
+
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .map((p, idx, arr) => {
+                  const prev = arr[idx - 1];
+                  const showEllipsis = prev && p - prev > 1;
+                  return (
+                    <span key={p} className="inline-flex items-center gap-1">
+                      {showEllipsis && <span className="px-1 text-slate-400">…</span>}
+                      <Button
+                        variant={currentPage === p ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCurrentPage(p)}
+                        className={`h-8 w-8 p-0 text-xs font-medium ${
+                          currentPage === p
+                            ? "bg-dvla-green hover:bg-dvla-green-light text-white border-dvla-green"
+                            : "border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {p}
+                      </Button>
+                    </span>
+                  );
+                })}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || loading}
+                className="h-8 px-2.5 text-xs font-normal border-slate-200 gap-1"
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </div>
 
