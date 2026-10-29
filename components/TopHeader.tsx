@@ -14,7 +14,6 @@ interface SessionUser {
   name: string;
   email: string;
   role: string;
-  stationName?: string | null;
 }
 
 function TopHeaderContent({ onMobileToggle }: TopHeaderProps) {
@@ -45,10 +44,10 @@ function TopHeaderContent({ onMobileToggle }: TopHeaderProps) {
     setSigningOut(true);
     try {
       await fetch("/api/auth/me", { method: "POST" });
-      router.push("/login");
+      router.push("/logout");
       router.refresh();
     } catch {
-      window.location.href = "/login";
+      window.location.href = "/logout";
     }
   };
 
@@ -79,36 +78,29 @@ function TopHeaderContent({ onMobileToggle }: TopHeaderProps) {
         </h1>
       </div>
 
-      <div className="flex items-center gap-3">
-        {user ? (
-          <div className="flex items-center gap-2.5">
-            <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200/80">
-              <User className="h-3.5 w-3.5 text-slate-500" />
-              <span className="text-xs font-medium text-slate-700">{user.name}</span>
-              <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1">
-                <Shield className="h-3 w-3" />
-                {user.role}
-              </span>
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSignOut}
-              disabled={signingOut}
-              className="h-8 text-xs font-medium border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50/50 gap-1.5"
-              title="Sign out"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{signingOut ? "Signing out..." : "Sign out"}</span>
-            </Button>
-          </div>
-        ) : (
-          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="font-medium text-slate-700">Request → Issue → Total Consumption</span>
+      <div className="flex items-center gap-2.5">
+        {user && (
+          <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200/80">
+            <User className="h-3.5 w-3.5 text-slate-500" />
+            <span className="text-xs font-medium text-slate-700">{user.name}</span>
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1">
+              <Shield className="h-3 w-3" />
+              {user.role}
+            </span>
           </div>
         )}
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="h-8 text-xs font-medium border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50/50 gap-1.5"
+          title="Sign out"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          <span>{signingOut ? "Signing out..." : "Sign out"}</span>
+        </Button>
 
         <div className="h-8 w-8 rounded-full bg-white flex items-center justify-center ring-1 ring-slate-200 shrink-0 overflow-hidden p-1">
           <img src="/oop.png" alt="DVLA Logo" className="h-full w-full object-contain" />

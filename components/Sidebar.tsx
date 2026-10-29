@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -11,6 +11,8 @@ import {
   PackageOpen,
   ChevronDown,
   ChevronRight,
+  LogOut,
+  User,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -28,11 +30,13 @@ interface SidebarProps {
 
 export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const currentCategory = searchParams.get("category");
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [categoriesExpanded, setCategoriesExpanded] = useState<boolean>(true);
+  const [userName, setUserName] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,6 +54,7 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         }
         if (active && meRes.ok) {
           const me = await meRes.json();
+          setUserName(me?.user?.name || null);
           setUserRole(me?.user?.role || null);
         }
       } catch (err) {
@@ -61,6 +66,17 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
       active = false;
     };
   }, [pathname]);
+
+  const handleSignOut = async () => {
+    if (onClose) onClose();
+    try {
+      await fetch("/api/auth/me", { method: "POST" });
+    } catch {
+      // ignore
+    }
+    router.push("/logout");
+    router.refresh();
+  };
 
   return (
     <>
@@ -203,9 +219,9 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
             )}
           </div>
 
-          {/* Bottom Nav (Administrators Only) */}
-          {userRole === "Administrator" && (
-            <div className="mt-auto space-y-1 pt-4 border-t border-white/10 shrink-0">
+          {/* Bottom Nav: Settings, User Info & Sign Out */}
+          <div className="mt-auto space-y-1.5 pt-4 border-t border-white/10 shrink-0">
+            {userRole === "Administrator" && (
               <Link
                 href="/settings"
                 onClick={() => onClose && onClose()}
@@ -213,14 +229,33 @@ export function Sidebar({ isOpen = false, onClose }: SidebarProps) {
                   pathname.startsWith("/settings")
                     ? "bg-dvla-green-light text-white font-medium shadow-xs ring-1 ring-dvla-gold/40"
                     : "text-white/80 hover:bg-white/10 hover:text-white",
-                  "group flex items-center px-3 py-2.5 text-sm font-normal rounded-md transition-all"
+                  "group flex items-center px-3 py-2 text-sm font-normal rounded-md transition-all"
                 )}
               >
-                <Settings className="mr-3 h-5 w-5 shrink-0 text-white/60 group-hover:text-white" />
+                <Settings className="mr-3 h-4 w-4 shrink-0 text-white/60 group-hover:text-white" />
                 Settings & Access Control
               </Link>
-            </div>
-          )}
+            )}
+
+            {userName && (
+              <div className="px-3 py-2 rounded-md bg-white/5 border border-white/10 flex items-center gap-2.5">
+                <User className="h-4 w-4 text-dvla-gold shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-white truncate">{userName}</div>
+                  <div className="text-[10px] text-white/60 truncate">{userRole}</div>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full flex items-center px-3 py-2 text-sm font-normal rounded-md text-red-200 hover:bg-red-500/20 hover:text-white transition-all group"
+            >
+              <LogOut className="mr-3 h-4 w-4 shrink-0 text-red-300 group-hover:text-white" />
+              Sign out
+            </button>
+          </div>
         </div>
       </div>
     </>

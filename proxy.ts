@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getSessionFromRequest, hasMinRole } from "@/lib/auth";
+import { COOKIE_NAME, getSessionFromRequest, hasMinRole } from "@/lib/auth";
 
-const PUBLIC_PATHS = ["/login", "/api/auth"];
+const PUBLIC_PATHS = ["/login", "/logout", "/api/auth"];
 const ADMIN_ONLY_PATHS = ["/settings", "/api/users"];
 
 export async function proxy(request: NextRequest) {
@@ -19,6 +19,13 @@ export async function proxy(request: NextRequest) {
     pathname.endsWith(".ico")
   ) {
     return NextResponse.next();
+  }
+
+  // Visiting /logout always clears the session cookie and renders the sign-out page
+  if (pathname.startsWith("/logout")) {
+    const res = NextResponse.next();
+    res.cookies.delete(COOKIE_NAME);
+    return res;
   }
 
   const session = await getSessionFromRequest(request);
@@ -50,7 +57,7 @@ export async function proxy(request: NextRequest) {
 
   // Admin-only routes (/settings and /api/users)
   if (ADMIN_ONLY_PATHS.some((r) => pathname.startsWith(r))) {
-    if (!hasMinRole(session, "Administrator")) {
+     if (!hasMinRole(session, "Administrator")) {
       if (pathname.startsWith("/api/")) {
         return NextResponse.json(
           { error: "Forbidden: Administrator role required." },
