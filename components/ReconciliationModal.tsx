@@ -578,7 +578,7 @@ export function ReconciliationModal({
                   <Label className="text-xs font-normal text-slate-500">Quantity Requested</Label>
                   <Input
                     type="number"
-                    min="1"
+                    min="0"
                     value={quantityRequested}
                     onChange={(e) => setQuantityRequested(e.target.value)}
                     className="bg-white border-slate-200 h-9 text-xs font-normal"

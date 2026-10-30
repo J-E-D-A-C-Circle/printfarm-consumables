@@ -101,6 +101,11 @@ function CategoriesContent() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteTargetRecord, setDeleteTargetRecord] = useState<ReturnSheetRecord | null>(null);
 
+  // Multi-row Selection State
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [batchActionLoading, setBatchActionLoading] = useState(false);
+  const [batchConfirmAction, setBatchConfirmAction] = useState<"delete" | "issue" | "complete" | null>(null);
+
   // Manage Consumable Types Modal State
   const [manageTypesOpen, setManageTypesOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
@@ -156,6 +161,66 @@ function CategoriesContent() {
   useEffect(() => {
     loadRecords();
   }, [loadRecords]);
+
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [currentPage, pageSize, searchTerm, selectedCategory, selectedStatus]);
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds(records.map((r) => r.id));
+    } else {
+      setSelectedIds([]);
+    }
+  };
+
+  const handleToggleRow = (id: number) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleBatchAction = async (action: "delete" | "issue" | "complete") => {
+    if (selectedIds.length === 0) return;
+    setBatchActionLoading(true);
+    try {
+      const res = await fetch("/api/issues/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to execute batch ${action}.`);
+      }
+
+      if (action === "delete") {
+        gooeyToast.success("Batch Delete Completed", {
+          description: `Deleted ${data.affected ?? selectedIds.length} records.`,
+        });
+      } else if (action === "issue") {
+        gooeyToast.success("Batch Issue Completed", {
+          description: `Marked ${data.affected ?? selectedIds.length} records as Issued.`,
+        });
+      } else if (action === "complete") {
+        gooeyToast.success("Batch Complete Executed", {
+          description: `Marked ${data.affected ?? selectedIds.length} records as Completed.`,
+        });
+      }
+
+      setSelectedIds([]);
+      setBatchConfirmAction(null);
+      await loadRecords();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : `Failed to perform batch ${action}.`;
+      gooeyToast.error("Batch Action Failed", { description: msg });
+    } finally {
+      setBatchActionLoading(false);
+    }
+  };
+
+  const allSelected = records.length > 0 && records.every((r) => selectedIds.includes(r.id));
+  const someSelected = selectedIds.length > 0 && !allSelected;
 
   const totalPages = Math.max(1, Math.ceil((summary.total_requests || 0) / pageSize));
   const startRow = summary.total_requests === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -277,12 +342,29 @@ function CategoriesContent() {
     }
   };
 
-  const handleExportExcel = () => {
-    if (records.length === 0) {
+  const handleExportExcel = async () => {
+    if (summary.total_requests === 0) {
       gooeyToast.warning("No Records to Export", {
         description: "There are no return sheet records matching your current filters to export.",
       });
       return;
+    }
+
+    let exportRecords: ReturnSheetRecord[] = records;
+    try {
+      const params = new URLSearchParams();
+      if (searchTerm) params.set("search", searchTerm);
+      if (selectedCategory !== "all") params.set("category", selectedCategory);
+      if (selectedStatus !== "all") params.set("status", selectedStatus);
+      params.set("page", "1");
+      params.set("limit", "10000");
+      const res = await fetch(`/api/issues?${params.toString()}`, { cache: "no-store" });
+      if (res.ok) {
+        const d = await res.json();
+        if (Array.isArray(d.data)) exportRecords = d.data;
+      }
+    } catch {
+      exportRecords = records;
     }
 
     const wb = XLSX.utils.book_new();
@@ -351,34 +433,32 @@ function CategoriesContent() {
       "TOTAL CONSUMPTION",
     ];
 
-    const dataRows = [...records]
-      .sort((a, b) => (a.date_requested || "").localeCompare(b.date_requested || ""))
-      .map((rec) => [
-        formatShortDate(rec.date_requested),
-        rec.consumable_name || rec.category || "",
-        Number(rec.quantity_requested ?? 0),
-        rec.quantity_issued !== null && rec.quantity_issued !== undefined
-          ? Number(rec.quantity_issued)
-          : "",
-        rec.issued_by || "",
-        rec.requested_by || "",
-        rec.received_by || "",
-        formatShortDate(rec.date_returned),
-        rec.total_consumption !== null && rec.total_consumption !== undefined
-          ? Number(rec.total_consumption)
-          : "",
-      ]);
+    const dataRows = exportRecords.map((rec) => [
+      formatShortDate(rec.date_requested),
+      rec.consumable_name || rec.category || "",
+      Number(rec.quantity_requested ?? 0),
+      rec.quantity_issued !== null && rec.quantity_issued !== undefined
+        ? Number(rec.quantity_issued)
+        : "",
+      rec.issued_by || "",
+      rec.requested_by || "",
+      rec.received_by || "",
+      formatShortDate(rec.date_returned),
+      rec.total_consumption !== null && rec.total_consumption !== undefined
+        ? Number(rec.total_consumption)
+        : "",
+    ]);
 
     const totalsRow = [
       "TOTAL",
-      `${records.length} Records`,
-      tableTotals.totalReq,
-      tableTotals.totalIss,
+      `${exportRecords.length} Records`,
+      summary.total_requested_qty,
+      summary.total_issued_qty,
       "",
       "",
       "",
       "",
-      tableTotals.totalCons,
+      summary.total_consumption,
     ];
 
     const ws = XLSX.utils.aoa_to_sheet([row0, row1, ...dataRows, totalsRow]);
@@ -430,7 +510,7 @@ function CategoriesContent() {
       `DVLA_Consumables_Return_Sheet_${new Date().toISOString().split("T")[0]}.xlsx`
     );
     gooeyToast.success("Excel Sheet Exported", {
-      description: `Exported ${records.length} return sheet records to DVLA_Consumables_Return_Sheet.xlsx.`,
+      description: `Exported ${exportRecords.length} return sheet records to DVLA_Consumables_Return_Sheet.xlsx.`,
     });
   };
 
@@ -607,12 +687,80 @@ function CategoriesContent() {
           </Button>
         </div>
 
+        {/* Floating Multi-row Action Bar */}
+        {selectedIds.length > 0 && (
+          <div className="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-dvla-green text-xs font-bold text-white">
+                {selectedIds.length}
+              </span>
+              <span className="text-xs font-medium">
+                {selectedIds.length === 1 ? "1 row selected" : `${selectedIds.length} rows selected`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-[11px] text-slate-400 hover:text-white underline ml-1"
+              >
+                Clear selection
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBatchConfirmAction("issue")}
+                disabled={batchActionLoading}
+                className="h-8 text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 gap-1.5"
+              >
+                <Send className="h-3 w-3 text-blue-400" />
+                Batch Issue
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBatchConfirmAction("complete")}
+                disabled={batchActionLoading}
+                className="h-8 text-xs bg-white/10 hover:bg-white/20 text-white border-white/20 gap-1.5"
+              >
+                <TrendingUp className="h-3 w-3 text-emerald-400" />
+                Batch Complete
+              </Button>
+
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => setBatchConfirmAction("delete")}
+                disabled={batchActionLoading}
+                className="h-8 text-xs bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                <Trash2 className="h-3 w-3" />
+                Batch Delete ({selectedIds.length})
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* CONSUMABLES RETURN SHEET TABLE (Single "CONSUMABLE TYPE" Column) */}
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
+                  <th className="py-2.5 px-3 text-center border-r border-slate-200 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="rounded border-slate-300 text-dvla-green focus:ring-dvla-green/20 h-3.5 w-3.5 cursor-pointer"
+                      title="Select all on this page"
+                    />
+                  </th>
                   <th
                     colSpan={7}
                     className="py-2.5 px-4 text-center font-medium tracking-wide border-r border-slate-200"
@@ -628,6 +776,9 @@ function CategoriesContent() {
                 </tr>
 
                 <tr className="bg-dvla-green text-white border-b border-slate-200">
+                  <th className="py-3 px-3 text-center border-r border-white/10 w-10">
+                    {/* Checkbox column header */}
+                  </th>
                   <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
                     Date Requested
                   </th>
@@ -664,14 +815,14 @@ function CategoriesContent() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-12 text-slate-400">
+                    <td colSpan={11} className="text-center py-12 text-slate-400">
                       <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-1.5" />
                       Loading Consumables Return Sheet...
                     </td>
                   </tr>
                 ) : records.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-12 text-slate-400">
+                    <td colSpan={11} className="text-center py-12 text-slate-400">
                       No consumable request or return records found. Click{" "}
                       <span className="font-medium text-slate-600">New Request / Return Entry</span> to add one.
                     </td>
@@ -684,12 +835,24 @@ function CategoriesContent() {
                         ? Number(rec.quantity_issued)
                         : null;
                     const diff = issQty !== null ? issQty - reqQty : 0;
+                    const isSelected = selectedIds.includes(rec.id);
 
                     return (
                       <tr
                         key={rec.id}
-                        className="bg-white hover:bg-slate-50/70 transition-colors"
+                        className={`transition-colors ${
+                          isSelected ? "bg-emerald-50/60" : "bg-white hover:bg-slate-50/70"
+                        }`}
                       >
+                        <td className="py-3 px-3 text-center border-r border-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleRow(rec.id)}
+                            className="rounded border-slate-300 text-dvla-green focus:ring-dvla-green/20 h-3.5 w-3.5 cursor-pointer"
+                          />
+                        </td>
+
                         <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
                           {formatShortDate(rec.date_requested)}
                         </td>
@@ -708,7 +871,7 @@ function CategoriesContent() {
                               <span className="font-medium text-blue-700">
                                 {issQty}
                               </span>
-                              {diff !== 0 && (
+                              {reqQty > 0 && diff !== 0 && (
                                 <span
                                   title={`Requested: ${reqQty}, Issued: ${issQty}`}
                                   className={`text-[10px] px-1.5 py-0.5 rounded ${
@@ -840,6 +1003,9 @@ function CategoriesContent() {
               {records.length > 0 && (
                 <tfoot className="sticky bottom-0 z-10 bg-slate-50 shadow-[0_-1px_0_0_rgba(226,232,240,1)]">
                   <tr className="bg-slate-50 border-t-2 border-slate-200 font-medium text-slate-800">
+                    <td className="py-3 px-3 text-center border-r border-slate-200">
+                      {/* Checkbox column footer */}
+                    </td>
                     <td className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
                       Total (All Pages)
                     </td>
@@ -1021,6 +1187,96 @@ function CategoriesContent() {
                 ))}
               </div>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* MODAL: BATCH ACTION CONFIRMATION */}
+        <Dialog
+          open={!!batchConfirmAction}
+          onOpenChange={(open) => {
+            if (!open && !batchActionLoading) setBatchConfirmAction(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200 p-6">
+            <DialogHeader>
+              <div className="flex items-center gap-3">
+                <div
+                  className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0 border ${
+                    batchConfirmAction === "delete"
+                      ? "bg-red-50 border-red-100 text-red-600"
+                      : batchConfirmAction === "issue"
+                      ? "bg-blue-50 border-blue-100 text-blue-600"
+                      : "bg-emerald-50 border-emerald-100 text-emerald-600"
+                  }`}
+                >
+                  {batchConfirmAction === "delete" ? (
+                    <Trash2 className="h-5 w-5" />
+                  ) : batchConfirmAction === "issue" ? (
+                    <Send className="h-5 w-5" />
+                  ) : (
+                    <TrendingUp className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-semibold text-slate-900">
+                    {batchConfirmAction === "delete"
+                      ? `Batch Delete ${selectedIds.length} Records`
+                      : batchConfirmAction === "issue"
+                      ? `Batch Issue ${selectedIds.length} Records`
+                      : `Batch Complete ${selectedIds.length} Records`}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    {batchConfirmAction === "delete"
+                      ? `Are you sure you want to permanently delete these ${selectedIds.length} selected consumable records? This action cannot be undone.`
+                      : batchConfirmAction === "issue"
+                      ? `Mark all ${selectedIds.length} selected records as Issued, assigning the requested quantity as issued.`
+                      : `Mark all ${selectedIds.length} selected records as Completed.`}
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <DialogFooter className="gap-2 sm:gap-2 pt-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={batchActionLoading}
+                onClick={() => setBatchConfirmAction(null)}
+                className="h-9 text-xs font-normal border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={batchActionLoading}
+                onClick={() => batchConfirmAction && handleBatchAction(batchConfirmAction)}
+                className={`h-9 text-xs font-medium text-white gap-1.5 ${
+                  batchConfirmAction === "delete"
+                    ? "bg-red-600 hover:bg-red-700"
+                    : batchConfirmAction === "issue"
+                    ? "bg-blue-600 hover:bg-blue-700"
+                    : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {batchActionLoading ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Processing...
+                  </>
+                ) : batchConfirmAction === "delete" ? (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Confirm Delete ({selectedIds.length})
+                  </>
+                ) : batchConfirmAction === "issue" ? (
+                  <>
+                    <Send className="h-3.5 w-3.5" /> Confirm Issue ({selectedIds.length})
+                  </>
+                ) : (
+                  <>
+                    <TrendingUp className="h-3.5 w-3.5" /> Confirm Complete ({selectedIds.length})
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

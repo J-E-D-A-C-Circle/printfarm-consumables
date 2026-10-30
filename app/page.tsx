@@ -366,7 +366,7 @@ export default function Dashboard() {
                           {issQ !== null ? (
                             <span className="inline-flex items-center gap-1">
                               <span className="font-medium text-blue-700">{issQ}</span>
-                              {diff !== 0 && (
+                              {reqQ > 0 && diff !== 0 && (
                                 <span
                                   className={`text-[10px] px-1 rounded ${
                                     diff < 0

@@ -123,6 +123,11 @@ export default function ConsumableStocksPage() {
   const [deleteTarget, setDeleteTarget] = useState<StockRecord | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
+  // Multi-row Selection State
+  const [selectedStockIds, setSelectedStockIds] = useState<number[]>([]);
+  const [batchStockLoading, setBatchStockLoading] = useState(false);
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+
   // Pre-fill Received By with signed-in user if available
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" })
@@ -167,6 +172,55 @@ export default function ConsumableStocksPage() {
   useEffect(() => {
     loadStocks();
   }, [loadStocks]);
+
+  useEffect(() => {
+    setSelectedStockIds([]);
+  }, [currentPage, pageSize, searchTerm, selectedCategory, dateFrom, dateTo]);
+
+  const handleSelectAllStocks = (checked: boolean) => {
+    if (checked) {
+      setSelectedStockIds(records.map((r) => r.id));
+    } else {
+      setSelectedStockIds([]);
+    }
+  };
+
+  const handleToggleStock = (id: number) => {
+    setSelectedStockIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleBatchDeleteStocks = async () => {
+    if (selectedStockIds.length === 0) return;
+    setBatchStockLoading(true);
+    try {
+      const res = await fetch("/api/stocks/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", ids: selectedStockIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to batch delete stock batches.");
+      }
+
+      gooeyToast.success("Batch Delete Completed", {
+        description: `Successfully deleted ${data.affected ?? selectedStockIds.length} stock batches.`,
+      });
+      setSelectedStockIds([]);
+      setBatchDeleteConfirmOpen(false);
+      await loadStocks();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to execute batch deletion.";
+      gooeyToast.error("Batch Delete Failed", { description: msg });
+    } finally {
+      setBatchStockLoading(false);
+    }
+  };
+
+  const allStocksSelected = records.length > 0 && records.every((r) => selectedStockIds.includes(r.id));
+  const someStocksSelected = selectedStockIds.length > 0 && !allStocksSelected;
 
   const totalPages = Math.max(1, Math.ceil((summary.total_entries || 0) / pageSize));
   const startRow = summary.total_entries === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -559,12 +613,56 @@ export default function ConsumableStocksPage() {
           </Button>
         </div>
 
+        {/* Floating Batch Action Bar for Stock Entries */}
+        {selectedStockIds.length > 0 && (
+          <div className="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-lg flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-dvla-green text-xs font-bold text-white">
+                {selectedStockIds.length}
+              </span>
+              <span className="text-xs font-medium">
+                {selectedStockIds.length === 1 ? "1 batch selected" : `${selectedStockIds.length} batches selected`}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedStockIds([])}
+                className="text-[11px] text-slate-400 hover:text-white underline ml-1"
+              >
+                Clear selection
+              </button>
+            </div>
+
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => setBatchDeleteConfirmOpen(true)}
+              disabled={batchStockLoading}
+              className="h-8 text-xs bg-red-600 hover:bg-red-700 text-white gap-1.5"
+            >
+              <Trash2 className="h-3 w-3" />
+              Batch Delete ({selectedStockIds.length})
+            </Button>
+          </div>
+        )}
+
         {/* Stock Additions Table with Static Total Row & 20/30/50/70 Pagination */}
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr className="bg-dvla-green text-white border-b border-slate-200">
+                  <th className="py-3 px-3 text-center border-r border-white/10 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allStocksSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someStocksSelected;
+                      }}
+                      onChange={(e) => handleSelectAllStocks(e.target.checked)}
+                      className="rounded border-slate-300 text-dvla-green focus:ring-dvla-green/20 h-3.5 w-3.5 cursor-pointer"
+                      title="Select all stock rows on this page"
+                    />
+                  </th>
                   <th className="py-3 px-4 text-left font-medium border-r border-white/10 whitespace-nowrap">
                     Date Received
                   </th>
@@ -598,82 +696,101 @@ export default function ConsumableStocksPage() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-12 text-slate-400">
+                    <td colSpan={10} className="text-center py-12 text-slate-400">
                       <Loader2 className="h-5 w-5 animate-spin mx-auto text-dvla-green mb-1.5" />
                       Loading stock batches...
                     </td>
                   </tr>
                 ) : records.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-12 text-slate-400">
+                    <td colSpan={10} className="text-center py-12 text-slate-400">
                       No stock batches found. Click{" "}
                       <span className="font-medium text-slate-600">Add Consumable Stock</span> to record incoming stock.
                     </td>
                   </tr>
                 ) : (
-                  records.map((rec) => (
-                    <tr key={rec.id} className="bg-white hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
-                        {formatShortDate(rec.date_received)}
-                      </td>
-                      <td className="py-3 px-4 text-slate-500 border-r border-slate-100 whitespace-nowrap">
-                        {rec.reference_number}
-                      </td>
-                      <td className="py-3 px-4 text-slate-800 font-medium border-r border-slate-100 whitespace-nowrap">
-                        {rec.consumable_name}
-                      </td>
-                      <td className="py-3 px-4 text-center border-r border-slate-100 whitespace-nowrap">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">
-                          +{Number(rec.quantity_added).toLocaleString()}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
-                        {rec.batch_number || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
-                        {rec.supplier || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-slate-700 border-r border-slate-100 whitespace-nowrap">
-                        {rec.received_by || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-slate-500 border-r border-slate-100 max-w-[220px] truncate">
-                        {rec.remarks || "—"}
-                      </td>
-                      <td className="py-2.5 px-4 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-slate-400 hover:text-dvla-green hover:bg-slate-100"
-                            title="Edit Stock Batch"
-                            onClick={() => openEditModal(rec)}
-                          >
-                            <Edit3 className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                            title="Delete Stock Batch"
-                            disabled={deletingId === rec.id}
-                            onClick={() => setDeleteTarget(rec)}
-                          >
-                            {deletingId === rec.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-red-500" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  records.map((rec) => {
+                    const isSelected = selectedStockIds.includes(rec.id);
+                    return (
+                      <tr
+                        key={rec.id}
+                        className={`transition-colors ${
+                          isSelected ? "bg-emerald-50/60" : "bg-white hover:bg-slate-50/70"
+                        }`}
+                      >
+                        <td className="py-3 px-3 text-center border-r border-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleStock(rec.id)}
+                            className="rounded border-slate-300 text-dvla-green focus:ring-dvla-green/20 h-3.5 w-3.5 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {formatShortDate(rec.date_received)}
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 border-r border-slate-100 whitespace-nowrap">
+                          {rec.reference_number}
+                        </td>
+                        <td className="py-3 px-4 text-slate-800 font-medium border-r border-slate-100 whitespace-nowrap">
+                          {rec.consumable_name}
+                        </td>
+                        <td className="py-3 px-4 text-center border-r border-slate-100 whitespace-nowrap">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">
+                            +{Number(rec.quantity_added).toLocaleString()}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {rec.batch_number || "—"}
+                        </td>
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 whitespace-nowrap">
+                          {rec.supplier || "—"}
+                        </td>
+                        <td className="py-3 px-4 text-slate-700 border-r border-slate-100 whitespace-nowrap">
+                          {rec.received_by || "—"}
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 border-r border-slate-100 max-w-[220px] truncate">
+                          {rec.remarks || "—"}
+                        </td>
+                        <td className="py-2.5 px-4 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-slate-400 hover:text-dvla-green hover:bg-slate-100"
+                              title="Edit Stock Batch"
+                              onClick={() => openEditModal(rec)}
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              title="Delete Stock Batch"
+                              disabled={deletingId === rec.id}
+                              onClick={() => setDeleteTarget(rec)}
+                            >
+                              {deletingId === rec.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-red-500" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
 
               {records.length > 0 && (
                 <tfoot className="sticky bottom-0 z-10 bg-slate-50 shadow-[0_-1px_0_0_rgba(226,232,240,1)]">
                   <tr className="bg-slate-50 border-t-2 border-slate-200 font-medium text-slate-800">
+                    <td className="py-3 px-3 text-center border-r border-slate-200">
+                      {/* Checkbox column footer */}
+                    </td>
                     <td className="py-3 px-4 border-r border-slate-200 whitespace-nowrap">
                       Total (All Pages)
                     </td>
@@ -926,6 +1043,56 @@ export default function ConsumableStocksPage() {
                 </Button>
               </DialogFooter>
             </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* Batch Delete Confirmation Modal */}
+        <Dialog
+          open={batchDeleteConfirmOpen}
+          onOpenChange={(isOpen) => {
+            if (!isOpen && !batchStockLoading) setBatchDeleteConfirmOpen(false);
+          }}
+        >
+          <DialogContent className="sm:max-w-md border-slate-200">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                <span className="h-8 w-8 rounded-lg bg-red-50 border border-red-200/80 flex items-center justify-center text-red-600 shrink-0">
+                  <Trash2 className="h-4 w-4" />
+                </span>
+                Batch Delete Stock Batches
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500 pt-1">
+                Are you sure you want to permanently delete all {selectedStockIds.length} selected stock batches? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={batchStockLoading}
+                onClick={() => setBatchDeleteConfirmOpen(false)}
+                className="font-normal text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={batchStockLoading}
+                onClick={handleBatchDeleteStocks}
+                className="bg-red-600 hover:bg-red-700 text-white font-medium text-xs h-9 gap-1.5"
+              >
+                {batchStockLoading ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" /> Confirm Delete ({selectedStockIds.length})
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

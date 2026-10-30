@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
     `SELECT r.*
      FROM consumable_requests r
      ${where}
-     ORDER BY r.date_requested ASC, r.id ASC`,
+     ORDER BY r.id ASC`,
     params
   );
 

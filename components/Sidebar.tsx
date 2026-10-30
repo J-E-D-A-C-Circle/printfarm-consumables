@@ -10,6 +10,7 @@ import {
   Settings,
   PackageOpen,
   Boxes,
+  ShieldCheck,
   ChevronDown,
   ChevronRight,
   LogOut,
@@ -23,6 +24,7 @@ const navigation = [
   { name: "Consumable Stocks", href: "/stocks", icon: Boxes },
   { name: "Consumables Return Sheet", href: "/categories", icon: FileSpreadsheet },
   { name: "Reports & Analytics", href: "/reports", icon: FileText },
+  { name: "Audit Logs", href: "/audit-logs", icon: ShieldCheck },
 ];
 
 interface SidebarProps {

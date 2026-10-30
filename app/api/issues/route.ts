@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
        r.received_by AS receiving_officer
      FROM consumable_requests r
      ${where}
-     ORDER BY r.date_requested DESC, r.id DESC
+     ORDER BY r.id ASC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
@@ -154,9 +154,9 @@ export async function POST(req: NextRequest) {
   const reqDate = date_requested || date_issued || new Date().toISOString().split("T")[0];
   const reqQty = Number(quantity_requested ?? quantity ?? 0);
 
-  if (reqQty <= 0) {
+  if (reqQty < 0 || Number.isNaN(reqQty)) {
     return NextResponse.json(
-      { error: "Quantity requested must be greater than zero." },
+      { error: "Quantity requested cannot be negative." },
       { status: 400 }
     );
   }

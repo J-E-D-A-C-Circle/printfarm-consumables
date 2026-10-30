@@ -264,15 +264,23 @@ export default function ReportsPage() {
       }
 
       if (hasIssued) {
-        const diff = issQ - reqQ;
-        if (diff === 0) exactIssuedCount++;
-        else if (diff > 0) moreIssuedCount++;
-        else lessIssuedCount++;
+        if (reqQ === 0) {
+          exactIssuedCount++;
+        } else {
+          const diff = issQ - reqQ;
+          if (diff === 0) exactIssuedCount++;
+          else if (diff > 0) moreIssuedCount++;
+          else lessIssuedCount++;
+        }
       }
     });
 
     const fulfillmentRate =
-      totalReqQty > 0 ? Math.round((totalIssQty / totalReqQty) * 100) : 0;
+      totalReqQty > 0
+        ? Math.round((totalIssQty / totalReqQty) * 100)
+        : totalRequests > 0
+        ? Math.round(((totalRequests - pendingIssueCount) / totalRequests) * 100)
+        : 0;
     const avgYieldPerIssuedUnit =
       completedIssQty > 0
         ? Math.round(totalConsumption / completedIssQty)

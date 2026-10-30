@@ -163,8 +163,12 @@ export function IssueStockModal({
       setError("Please select a consumable type.");
       return;
     }
-    if (reqNum <= 0) {
-      setError("Quantity requested must be greater than zero.");
+    if (reqNum < 0) {
+      setError("Quantity requested cannot be negative.");
+      return;
+    }
+    if (entryMode === "request" && reqNum <= 0) {
+      setError("Quantity requested must be greater than zero when logging a request.");
       return;
     }
     if (!requestedBy.trim()) {
@@ -391,12 +395,11 @@ export function IssueStockModal({
                 </Label>
                 <Input
                   type="number"
-                  min="1"
-                  placeholder="e.g. 10"
+                  min="0"
+                  placeholder="0 (if direct issue)"
                   value={quantityRequested}
                   onChange={(e) => handleReqQtyChange(e.target.value)}
                   className="bg-white border-slate-200 h-9 text-xs font-normal"
-                  required
                 />
               </div>
 
